@@ -1,0 +1,1249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sleepwalker</title>
+<style>
+  html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:#0c0a1e;
+               font-family: Georgia, 'Times New Roman', serif; }
+  #c { display:block; width:100%; height:100%; touch-action:none; cursor:grab; }
+  #c.dragging { cursor:grabbing; }
+  #ui { position:fixed; inset:0; pointer-events:none; color:#d9cfee; }
+
+  #vign { position:absolute; inset:0;
+    background: radial-gradient(ellipse at center, rgba(0,0,0,0) 55%, rgba(10,6,24,0.55) 100%); }
+
+  #hud { position:absolute; top:18px; left:22px; opacity:0.92; }
+  #hudLevel { font-style:italic; font-size:15px; letter-spacing:2.5px; color:#cabfe8; text-shadow:0 0 12px rgba(90,70,140,0.8); }
+  #hudHint  { margin-top:5px; font-size:12.5px; letter-spacing:1.2px; color:#9d92c4; opacity:1;
+              transition:opacity 2.5s ease; }
+  #hudHint.faded { opacity:0; }
+  #hudKeys { position:absolute; top:18px; right:22px; text-align:right; font-size:11.5px;
+             letter-spacing:1.5px; color:#7d74a6; }
+
+  #dialWrap { position:absolute; bottom:20px; left:50%; transform:translateX(-50%);
+              display:flex; flex-direction:column; align-items:center; gap:4px; opacity:0.85; }
+  #dial { width:54px; height:54px; }
+  #dialLbl { font-size:10px; letter-spacing:3px; color:#7d74a6; font-style:italic; }
+
+  #stuck { position:absolute; bottom:96px; width:100%; text-align:center; font-style:italic;
+           font-size:14px; color:#bfa9d8; opacity:0; transition:opacity 1.2s ease;
+           text-shadow:0 0 10px rgba(0,0,0,0.6); }
+  #stuck.show { opacity:0.95; }
+
+  #intro { position:absolute; top:34%; width:100%; text-align:center; opacity:0;
+           transition:opacity 1.4s ease; }
+  #intro.show { opacity:1; }
+  #introNum { font-size:13px; letter-spacing:6px; color:#8e82ba; text-transform:uppercase; }
+  #introName { font-size:44px; font-style:italic; margin-top:10px; color:#e8dff7;
+               text-shadow:0 0 30px rgba(140,110,200,0.55); letter-spacing:3px; }
+
+  #ov { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center;
+        justify-content:center; text-align:center; background:rgba(11,7,26,0.0);
+        opacity:0; transition:opacity 0.9s ease; }
+  #ov.show { opacity:1; background:rgba(11,7,26,0.55); backdrop-filter:blur(2px); }
+  #ovT { font-size:56px; font-style:italic; color:#f0e8fb; margin:0 30px;
+         text-shadow:0 0 40px rgba(150,120,220,0.6); letter-spacing:2px; font-weight:normal; }
+  #ovS { font-size:17px; color:#b3a6d6; margin-top:16px; font-style:italic; letter-spacing:1px; }
+  #ovI { font-size:14px; color:#9d92c4; margin-top:30px; line-height:2.1; letter-spacing:1.5px; }
+  #ovP { font-size:14px; color:#d5c8ef; margin-top:38px; letter-spacing:3px;
+         animation:pulse 2.4s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:0.45} 50%{opacity:1} }
+  .hidden { display:none !important; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="ui">
+  <div id="vign"></div>
+  <div id="hud">
+    <div id="hudLevel"></div>
+    <div id="hudHint"></div>
+  </div>
+  <div id="hudKeys">drag / ← → &nbsp;turn the world<br>R restart · M sound</div>
+  <div id="stuck">the dream resists… turn the world, or press R</div>
+  <div id="intro"><div id="introNum"></div><div id="introName"></div></div>
+  <div id="dialWrap">
+    <svg id="dial" viewBox="-30 -30 60 60">
+      <circle r="26" fill="rgba(20,14,40,0.5)" stroke="#54487e" stroke-width="1.5"/>
+      <g id="dialg">
+        <rect x="-14" y="4" width="28" height="4" rx="2" fill="#8fb79e"/>
+        <path d="M -4 4 L 0 -8 L 4 4 Z" fill="#b48ab4"/>
+        <circle cx="10" cy="-13" r="3.4" fill="#f5edd6"/>
+      </g>
+    </svg>
+    <div id="dialLbl">the world</div>
+  </div>
+  <div id="ov">
+    <h1 id="ovT"></h1>
+    <div id="ovS"></div>
+    <div id="ovI"></div>
+    <div id="ovP"></div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+'use strict';
+if (typeof THREE === 'undefined') {
+  document.getElementById('ovT').textContent = 'The dream needs the internet';
+  document.getElementById('ovS').textContent = 'Three.js could not load — connect and refresh.';
+  document.getElementById('ov').classList.add('show');
+  throw new Error('THREE failed to load');
+}
+
+/* ============================== helpers ============================== */
+const V3 = (x,y,z)=>new THREE.Vector3(x,y,z);
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const lerp=(a,b,t)=>a+(b-a)*t;
+const wrapPi=a=>Math.atan2(Math.sin(a),Math.cos(a));
+const DEG=Math.PI/180;
+function mulberry32(seed){ let a=seed>>>0; return function(){ a|=0; a=a+0x6D2B79F5|0;
+  let t=Math.imul(a^a>>>15,1|a); t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; }
+
+/* ============================== palette ============================== */
+const PAL = {
+  skyTop:0x080614, skyMid:0x141026, skyHor:0x3f3058, skyLow:0x1c1738,
+  fog:0x171230,
+  top:0x86b298, top2:0x93b19b, rock:0x524a76, rockDark:0x3d3660,
+  trunk:0x6b5a70, canopy:[0xb48ab4,0x7fae9e,0xc9a3b8,0x8f9fc9],
+  lantern:0xffd9a0, moon:0xfdf3d0,
+  gown:0xf2e2e6, skin:0xf0c8a8, hair:0x5a4260, blush:0xe8a0a0,
+  bedFrame:0x8a6d8f, mattress:0xf5eef2, blanket:0xa8c8e8, pillow:0xfffaf5,
+  cloud:0x8a7fa8, floatRock:0x7a708f,
+};
+
+function mat(color, o){ return new THREE.MeshStandardMaterial(Object.assign(
+  { color, roughness:0.92, metalness:0.0, flatShading:true }, o||{})); }
+
+/* Deterministic position-hashed vertex displacement.
+   r128 geometries duplicate shared corners (non-indexed icosahedra, cylinder seams),
+   so random-per-vertex jitter tears meshes apart — hashing by position moves
+   every duplicate of a corner identically and the mesh stays watertight. */
+function jitterVerts(g, amp, seed, scaleMode){
+  const p=g.attributes.position;
+  for (let k=0;k<p.count;k++){
+    const x=p.getX(k), y=p.getY(k), z=p.getZ(k);
+    const f=v=>{ const s=Math.sin(v)*43758.5453; return s-Math.floor(s); };
+    const r1=f(x*127.1+y*311.7+z*74.7+seed), r2=f(x*269.5+y*183.3+z*246.1+seed),
+          r3=f(x*113.5+y*271.9+z*124.6+seed);
+    if (scaleMode) p.setXYZ(k, x*(1-amp/2+r1*amp), y*(1-amp/2+r2*amp), z*(1-amp/2+r3*amp));
+    else p.setXYZ(k, x+(r1-0.5)*amp, y+(r2-0.5)*amp, z+(r3-0.5)*amp);
+  }
+  g.computeVertexNormals();
+}
+
+/* ============================== renderer / scene ============================== */
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.outputEncoding = THREE.sRGBEncoding;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.08;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.setClearColor(PAL.skyTop);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(PAL.fog, 0.0095);
+
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 900);
+window.addEventListener('resize', ()=>{
+  camera.aspect = window.innerWidth/window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+/* lights */
+const hemi = new THREE.HemisphereLight(0x8d86c9, 0x3a2f55, 0.6); scene.add(hemi);
+const moonDir = V3(0.3, 0.38, 0.85).normalize();
+const dl = new THREE.DirectionalLight(0xcfd8ff, 0.85);
+dl.castShadow = true;
+dl.shadow.mapSize.set(2048, 2048);
+dl.shadow.camera.left=-28; dl.shadow.camera.right=28;
+dl.shadow.camera.top=28; dl.shadow.camera.bottom=-28;
+dl.shadow.camera.near=1; dl.shadow.camera.far=140;
+dl.shadow.bias = -0.0006;
+scene.add(dl); scene.add(dl.target);
+
+/* ============================== sky ============================== */
+const sky = new THREE.Group(); scene.add(sky);
+{
+  const g = new THREE.SphereGeometry(420, 28, 18);
+  const pos = g.attributes.position, n = pos.count;
+  const cols = new Float32Array(n*3);
+  const cTop=new THREE.Color(PAL.skyTop), cMid=new THREE.Color(PAL.skyMid),
+        cHor=new THREE.Color(PAL.skyHor), cLow=new THREE.Color(PAL.skyLow), tmp=new THREE.Color();
+  for (let i=0;i<n;i++){
+    const y = pos.getY(i)/420;
+    if (y>0.22) tmp.copy(cMid).lerp(cTop, (y-0.22)/0.78);
+    else if (y>-0.06) tmp.copy(cHor).lerp(cMid, (y+0.06)/0.28);
+    else tmp.copy(cHor).lerp(cLow, Math.min(1, -(y+0.06)/0.5));
+    cols[i*3]=tmp.r; cols[i*3+1]=tmp.g; cols[i*3+2]=tmp.b;
+  }
+  g.setAttribute('color', new THREE.BufferAttribute(cols,3));
+  const m = new THREE.MeshBasicMaterial({ vertexColors:true, side:THREE.BackSide, fog:false, depthWrite:false });
+  const dome = new THREE.Mesh(g,m); dome.renderOrder=-10; sky.add(dome);
+}
+/* moon + glow */
+{
+  const moon = new THREE.Mesh(new THREE.SphereGeometry(11, 22, 16),
+    new THREE.MeshBasicMaterial({ color:PAL.moon, fog:false }));
+  moon.position.copy(moonDir).multiplyScalar(340);
+  sky.add(moon);
+  const cv=document.createElement('canvas'); cv.width=cv.height=256;
+  const cx=cv.getContext('2d');
+  const gr=cx.createRadialGradient(128,128,10,128,128,128);
+  gr.addColorStop(0,'rgba(255,244,214,0.85)'); gr.addColorStop(0.35,'rgba(224,200,235,0.28)');
+  gr.addColorStop(1,'rgba(200,180,240,0)');
+  cx.fillStyle=gr; cx.fillRect(0,0,256,256);
+  const sm=new THREE.SpriteMaterial({ map:new THREE.CanvasTexture(cv), transparent:true,
+    blending:THREE.AdditiveBlending, fog:false, depthWrite:false });
+  const glow=new THREE.Sprite(sm); glow.scale.set(150,150,1);
+  glow.position.copy(moon.position); sky.add(glow);
+}
+/* stars — 3 twinkle layers */
+const starMats=[];
+{
+  for (let L=0; L<3; L++){
+    const N=260, arr=new Float32Array(N*3);
+    const rng=mulberry32(77+L);
+    for (let i=0;i<N;i++){
+      const u=rng()*2-1, ph=rng()*Math.PI*2, r=Math.sqrt(1-u*u);
+      arr[i*3]=r*Math.cos(ph)*400; arr[i*3+1]=u*400; arr[i*3+2]=r*Math.sin(ph)*400;
+    }
+    const g=new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(arr,3));
+    const m=new THREE.PointsMaterial({ color:0xe8e4ff, size:1.4+L*0.9, sizeAttenuation:false,
+      transparent:true, opacity:0.8, fog:false, depthWrite:false });
+    starMats.push(m); sky.add(new THREE.Points(g,m));
+  }
+}
+
+/* ============================== textures for sprites/points ============================== */
+function softDotTexture(){
+  const cv=document.createElement('canvas'); cv.width=cv.height=64;
+  const cx=cv.getContext('2d');
+  const gr=cx.createRadialGradient(32,32,2,32,32,30);
+  gr.addColorStop(0,'rgba(255,255,255,1)'); gr.addColorStop(0.5,'rgba(255,255,255,0.4)');
+  gr.addColorStop(1,'rgba(255,255,255,0)');
+  cx.fillStyle=gr; cx.fillRect(0,0,64,64);
+  return new THREE.CanvasTexture(cv);
+}
+const dotTex = softDotTexture();
+function zzzTexture(){
+  const cv=document.createElement('canvas'); cv.width=cv.height=128;
+  const cx=cv.getContext('2d');
+  cx.font='italic 86px Georgia'; cx.textAlign='center'; cx.textBaseline='middle';
+  cx.shadowColor='rgba(207,195,255,0.9)'; cx.shadowBlur=18;
+  cx.fillStyle='#cfc3ff'; cx.fillText('z', 64, 66);
+  return new THREE.CanvasTexture(cv);
+}
+const zzzTex = zzzTexture();
+
+/* ============================== drifting motes ============================== */
+const MOTES=320;
+const moteGeo=new THREE.BufferGeometry();
+const motePos=new Float32Array(MOTES*3), moteCol=new Float32Array(MOTES*3);
+const moteVel=[], moteRng=mulberry32(1234);
+const motePals=[new THREE.Color(0xfff0f6), new THREE.Color(0xd6f5e3), new THREE.Color(0xe6ddff), new THREE.Color(0xfff6d8)];
+for (let i=0;i<MOTES;i++){
+  motePos[i*3]=(moteRng()*2-1)*26; motePos[i*3+1]=(moteRng()*2-1)*26; motePos[i*3+2]=(moteRng()*2-1)*44;
+  const c=motePals[(moteRng()*motePals.length)|0];
+  moteCol[i*3]=c.r; moteCol[i*3+1]=c.g; moteCol[i*3+2]=c.b;
+  moteVel.push({ ph:moteRng()*Math.PI*2, sp:0.14+moteRng()*0.22 });
+}
+moteGeo.setAttribute('position', new THREE.BufferAttribute(motePos,3));
+moteGeo.setAttribute('color', new THREE.BufferAttribute(moteCol,3));
+const motes=new THREE.Points(moteGeo, new THREE.PointsMaterial({ size:0.16, map:dotTex,
+  vertexColors:true, transparent:true, opacity:0.7, depthWrite:false,
+  blending:THREE.AdditiveBlending, sizeAttenuation:true }));
+scene.add(motes);
+
+/* ============================== audio ============================== */
+const AU = { ctx:null, master:null, muted:false, degree:4, nextNote:0, melDeg:2, delay:null };
+try { AU.muted = localStorage.getItem('sw_mute')==='1'; } catch(e){}
+function audioInit(){
+  if (AU.ctx) { AU.ctx.resume && AU.ctx.resume(); return; }
+  try {
+    const C = new (window.AudioContext||window.webkitAudioContext)();
+    AU.ctx=C;
+    AU.master=C.createGain(); AU.master.gain.value = AU.muted?0:0.5; AU.master.connect(C.destination);
+    // echo for dreaminess
+    const d=C.createDelay(1.2); d.delayTime.value=0.42;
+    const fb=C.createGain(); fb.gain.value=0.32;
+    const wet=C.createGain(); wet.gain.value=0.4;
+    d.connect(fb); fb.connect(d); d.connect(wet); wet.connect(AU.master);
+    AU.delay=d;
+    // sleep-hum pad
+    const pg=C.createGain(); pg.gain.value=0.05;
+    const lp=C.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=260;
+    [110, 110.6, 165.3].forEach(f=>{
+      const o=C.createOscillator(); o.type='triangle'; o.frequency.value=f; o.start();
+      o.connect(lp);
+    });
+    lp.connect(pg); pg.connect(AU.master);
+    // wind
+    const len=2*C.sampleRate, buf=C.createBuffer(1,len,C.sampleRate), ch=buf.getChannelData(0);
+    for (let i=0;i<len;i++) ch[i]=Math.random()*2-1;
+    const src=C.createBufferSource(); src.buffer=buf; src.loop=true;
+    const bp=C.createBiquadFilter(); bp.type='bandpass'; bp.frequency.value=480; bp.Q.value=0.5;
+    const wg=C.createGain(); wg.gain.value=0.018;
+    src.connect(bp); bp.connect(wg); wg.connect(AU.master); src.start();
+    AU.nextNote=C.currentTime+1.2;
+  } catch(e){ AU.ctx=null; }
+}
+const PENT=[0,2,4,7,9];
+function degFreq(deg, base){ // pentatonic degree → Hz
+  const oct=Math.floor(deg/5), st=PENT[((deg%5)+5)%5];
+  return (base||220)*Math.pow(2, oct + st/12);
+}
+function pluck(freq, vol, dur, pan){
+  if (!AU.ctx) return;
+  const C=AU.ctx, t=C.currentTime;
+  const g=C.createGain();
+  g.gain.setValueAtTime(0.0001,t);
+  g.gain.exponentialRampToValueAtTime(vol,t+0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001,t+(dur||1.6));
+  const o=C.createOscillator(); o.type='sine'; o.frequency.value=freq;
+  const o2=C.createOscillator(); o2.type='sine'; o2.frequency.value=freq*2.01;
+  const g2=C.createGain(); g2.gain.value=0.22;
+  o.connect(g); o2.connect(g2); g2.connect(g);
+  let out=g;
+  if (C.createStereoPanner){ const p=C.createStereoPanner(); p.pan.value=pan||0; g.connect(p); out=p; }
+  out.connect(AU.master); out.connect(AU.delay);
+  o.start(t); o2.start(t); o.stop(t+dur+0.1); o2.stop(t+dur+0.1);
+}
+function chime(dir){
+  AU.degree = clamp(AU.degree + (dir>0?1:-1), -2, 14);
+  pluck(degFreq(AU.degree, 440), 0.1, 1.4, (Math.random()*0.8-0.4));
+}
+function thump(strength){
+  if (!AU.ctx) return;
+  const C=AU.ctx, t=C.currentTime;
+  const len=0.15*C.sampleRate, buf=C.createBuffer(1,len,C.sampleRate), ch=buf.getChannelData(0);
+  for (let i=0;i<len;i++) ch[i]=(Math.random()*2-1)*(1-i/len);
+  const src=C.createBufferSource(); src.buffer=buf;
+  const lp=C.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=240;
+  const g=C.createGain(); g.gain.value=clamp(strength,0,1)*0.5;
+  src.connect(lp); lp.connect(g); g.connect(AU.master); src.start(t);
+}
+function sfxWake(){
+  if (!AU.ctx) return;
+  thump(1.0);
+  [330,349].forEach((f,i)=>{
+    const C=AU.ctx,t=C.currentTime;
+    const o=C.createOscillator(); o.type='sawtooth'; o.frequency.value=f;
+    const g=C.createGain(); g.gain.setValueAtTime(0.08,t);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+0.7);
+    o.connect(g); g.connect(AU.master); o.start(t); o.stop(t+0.8);
+  });
+}
+function sfxVoid(){
+  if (!AU.ctx) return;
+  const C=AU.ctx,t=C.currentTime;
+  const o=C.createOscillator(); o.type='sine';
+  o.frequency.setValueAtTime(520,t); o.frequency.exponentialRampToValueAtTime(65,t+1.5);
+  const g=C.createGain(); g.gain.setValueAtTime(0.14,t);
+  g.gain.exponentialRampToValueAtTime(0.0001,t+1.6);
+  o.connect(g); g.connect(AU.master); o.connect(AU.delay); o.start(t); o.stop(t+1.7);
+}
+function sfxWin(){
+  [0,4,7,12].forEach((s,i)=>setTimeout(()=>pluck(degFreq(s+2,440)*1.0,0.12,1.8,(i-1.5)*0.2), i*170));
+}
+function melodyTick(){
+  if (!AU.ctx || AU.muted) return;
+  const C=AU.ctx;
+  if (C.currentTime < AU.nextNote) return;
+  AU.nextNote = C.currentTime + 0.92;
+  if (Math.random()<0.28) return; // rest
+  const steps=[-2,-1,-1,0,1,1,2,3];
+  AU.melDeg = clamp(AU.melDeg + steps[(Math.random()*steps.length)|0], -3, 9);
+  pluck(degFreq(AU.melDeg,220), 0.055, 2.2, Math.random()*0.7-0.35);
+}
+function setMute(m){
+  AU.muted=m;
+  if (AU.master) AU.master.gain.value = m?0:0.5;
+  try{ localStorage.setItem('sw_mute', m?'1':'0'); }catch(e){}
+}
+
+/* ============================== girl ============================== */
+function buildGirl(){
+  const grp=new THREE.Group();
+  const root=new THREE.Group(); root.position.y=-0.52; grp.add(root);
+  const G={ grp, root };
+  const skin=mat(PAL.skin), gownM=mat(PAL.gown,{ emissive:0x7a6577, emissiveIntensity:0.22 }),
+        hairM=mat(PAL.hair);
+
+  const gown=new THREE.Mesh(new THREE.CylinderGeometry(0.13,0.36,0.66,6,1), gownM);
+  gown.position.y=0.38; gown.castShadow=true; root.add(gown); G.gown=gown;
+
+  const head=new THREE.Group(); head.position.set(0,0.92,0); root.add(head); G.head=head;
+  const skull=new THREE.Mesh(new THREE.SphereGeometry(0.19,10,8), skin); skull.castShadow=true; head.add(skull);
+  const hair=new THREE.Mesh(new THREE.SphereGeometry(0.205,10,8), hairM);
+  hair.position.set(0,0.035,-0.04); hair.scale.set(1,0.95,1.02); head.add(hair);
+  const bun=new THREE.Mesh(new THREE.SphereGeometry(0.09,8,6), hairM);
+  bun.position.set(0,0.17,-0.14); head.add(bun); G.bun=bun;
+  // sleeping lashes
+  G.lashes=[];
+  [-1,1].forEach(s=>{
+    const l=new THREE.Mesh(new THREE.BoxGeometry(0.06,0.012,0.012), mat(0x3a2b3d));
+    l.position.set(s*0.075,-0.015,0.175); head.add(l); G.lashes.push(l);
+  });
+  // open eyes (hidden until she wakes)
+  G.eyes=[];
+  [-1,1].forEach(s=>{
+    const e=new THREE.Mesh(new THREE.SphereGeometry(0.028,6,5), mat(0x2b2135));
+    e.position.set(s*0.075,-0.01,0.175); e.visible=false; head.add(e); G.eyes.push(e);
+  });
+  [-1,1].forEach(s=>{
+    const b=new THREE.Mesh(new THREE.SphereGeometry(0.026,6,5), mat(PAL.blush));
+    b.position.set(s*0.115,-0.06,0.145); b.scale.z=0.4; head.add(b);
+  });
+
+  function arm(s){
+    const a=new THREE.Group(); a.position.set(s*0.145,0.68,0.06); root.add(a);
+    const seg=new THREE.Mesh(new THREE.BoxGeometry(0.07,0.07,0.46), gownM);
+    seg.position.z=0.23; seg.castShadow=true; a.add(seg);
+    const hand=new THREE.Mesh(new THREE.SphereGeometry(0.05,6,5), skin);
+    hand.position.z=0.48; a.add(hand);
+    a.rotation.x=0.12;
+    return a;
+  }
+  G.armL=arm(-1); G.armR=arm(1);
+
+  function leg(s){
+    const l=new THREE.Group(); l.position.set(s*0.08,0.3,0); root.add(l);
+    const seg=new THREE.Mesh(new THREE.BoxGeometry(0.085,0.3,0.085), skin);
+    seg.position.y=-0.15; l.add(seg);
+    const foot=new THREE.Mesh(new THREE.BoxGeometry(0.09,0.055,0.17), mat(0xe8b7c4));
+    foot.position.set(0,-0.3,0.035); l.add(foot);
+    return l;
+  }
+  G.legL=leg(-1); G.legR=leg(1);
+  grp.traverse(o=>{ if(o.isMesh) o.castShadow=true; });
+  return G;
+}
+
+/* ============================== procedural deco ============================== */
+function makeTree(rng){
+  const t=new THREE.Group();
+  const h=0.45+rng()*0.5;
+  const trunk=new THREE.Mesh(new THREE.CylinderGeometry(0.05,0.09,h,5), mat(PAL.trunk));
+  trunk.position.y=h/2; trunk.castShadow=true; t.add(trunk);
+  const col=PAL.canopy[(rng()*PAL.canopy.length)|0];
+  const n=1+(rng()*2|0);
+  for (let i=0;i<n;i++){
+    const r=0.3+rng()*0.32;
+    const g=new THREE.IcosahedronGeometry(r,0);
+    jitterVerts(g, 0.1, rng()*100, false);
+    const c=new THREE.Mesh(g, mat(col));
+    c.position.set((rng()-0.5)*0.3, h+ i*r*0.85, (rng()-0.5)*0.3);
+    c.castShadow=true; t.add(c);
+  }
+  return t;
+}
+function makeLantern(){
+  const t=new THREE.Group();
+  const post=new THREE.Mesh(new THREE.CylinderGeometry(0.035,0.05,1.15,5), mat(PAL.trunk));
+  post.position.y=0.575; post.castShadow=true; t.add(post);
+  const arm=new THREE.Mesh(new THREE.BoxGeometry(0.3,0.05,0.05), mat(PAL.trunk));
+  arm.position.set(0.13,1.14,0); t.add(arm);
+  const bulb=new THREE.Mesh(new THREE.OctahedronGeometry(0.1,0),
+    new THREE.MeshStandardMaterial({ color:PAL.lantern, emissive:PAL.lantern,
+      emissiveIntensity:1.6, flatShading:true }));
+  bulb.position.set(0.26,1.02,0); t.add(bulb);
+  const sm=new THREE.SpriteMaterial({ map:dotTex, color:PAL.lantern, transparent:true,
+    opacity:0.55, blending:THREE.AdditiveBlending, depthWrite:false });
+  const glow=new THREE.Sprite(sm); glow.scale.set(1.1,1.1,1); glow.position.copy(bulb.position);
+  t.add(glow);
+  return t;
+}
+function makeFlower(rng){
+  const t=new THREE.Group();
+  const h=0.14+rng()*0.14;
+  const stem=new THREE.Mesh(new THREE.CylinderGeometry(0.012,0.015,h,4), mat(0x6f8f7a));
+  stem.position.y=h/2; t.add(stem);
+  const cols=[0xf3b8c8, 0xcfc3ff, 0xfff0b8, 0xbfe8dd];
+  const head=new THREE.Mesh(new THREE.SphereGeometry(0.045,6,5), mat(cols[(rng()*cols.length)|0],
+    { emissive:cols[(rng()*cols.length)|0], emissiveIntensity:0.25 }));
+  head.position.y=h+0.02; t.add(head);
+  return t;
+}
+function makeGrass(rng){
+  const t=new THREE.Group();
+  for(let i=0;i<3;i++){
+    const b=new THREE.Mesh(new THREE.ConeGeometry(0.035,0.16+rng()*0.1,4), mat(0x7fae8e));
+    b.position.set((rng()-0.5)*0.16, 0.08, (rng()-0.5)*0.16);
+    t.add(b);
+  }
+  return t;
+}
+function makeFloatRock(rng, r){
+  const g=new THREE.IcosahedronGeometry(r,0);
+  jitterVerts(g, 0.4, rng()*100, true);
+  const m=new THREE.Mesh(g, mat(PAL.floatRock));
+  m.castShadow=true; m.receiveShadow=true;
+  return m;
+}
+function makeBedGroup(){
+  const t=new THREE.Group();
+  const frameM=mat(PAL.bedFrame);
+  [[-0.68,-1.05],[0.68,-1.05],[-0.68,1.05],[0.68,1.05]].forEach(([x,z])=>{
+    const l=new THREE.Mesh(new THREE.BoxGeometry(0.12,0.3,0.12), frameM);
+    l.position.set(x,0.15,z); t.add(l);
+  });
+  const frame=new THREE.Mesh(new THREE.BoxGeometry(1.5,0.22,2.35), frameM);
+  frame.position.y=0.4; frame.castShadow=true; t.add(frame);
+  const matt=new THREE.Mesh(new THREE.BoxGeometry(1.36,0.2,2.2),
+    mat(PAL.mattress,{ emissive:0xd8c8e0, emissiveIntensity:0.18 }));
+  matt.position.y=0.61; t.add(matt);
+  const blanket=new THREE.Mesh(new THREE.BoxGeometry(1.4,0.1,1.35), mat(PAL.blanket));
+  blanket.position.set(0,0.72,-0.38); t.add(blanket);
+  const pillow=new THREE.Mesh(new THREE.BoxGeometry(0.88,0.16,0.5), mat(PAL.pillow));
+  pillow.position.set(0,0.76,0.75); pillow.rotation.x=-0.08; t.add(pillow);
+  const hb=new THREE.Mesh(new THREE.BoxGeometry(1.5,0.95,0.12), frameM);
+  hb.position.set(0,0.85,1.22); hb.castShadow=true; t.add(hb);
+  const light=new THREE.PointLight(0xffd9b0, 0.9, 9); light.position.set(0,1.6,0); t.add(light);
+  t.traverse(o=>{ if(o.isMesh) o.receiveShadow=true; });
+  return t;
+}
+
+/* island visual for one segment (built in segment-local coords, group rotated by phi) */
+function buildSegment(seg, level, rng){
+  const grp=new THREE.Group();
+  grp.rotation.z = seg.phi;
+  const w=seg.w, gy=seg.gy, z0=seg.z, L=seg.len;
+  const topM = mat((rng()<0.5)?PAL.top:PAL.top2);
+  const top=new THREE.Mesh(new THREE.BoxGeometry(w,0.34,L), topM);
+  top.position.set(seg.x, gy-0.17, z0+L/2);
+  top.receiveShadow=true; top.castShadow=true;
+  grp.add(top);
+  // hanging rock chunks underneath
+  const rockM=mat(PAL.rock), rockM2=mat(PAL.rockDark);
+  for (let z=z0+1.2; z<z0+L-0.6; z+=2.6+rng()*1.6){
+    const depth=1.1+rng()*1.6;
+    const g=new THREE.CylinderGeometry(w*(0.3+rng()*0.14), w*0.05, depth, 5, 1);
+    jitterVerts(g, 0.22, rng()*100, false);
+    const m=new THREE.Mesh(g, rng()<0.5?rockM:rockM2);
+    m.position.set(seg.x+(rng()-0.5)*w*0.25, gy-0.34-depth/2, z);
+    m.castShadow=true;
+    grp.add(m);
+  }
+  // deco (kept clear of |x - seg.x| < 1.05 walking lane)
+  if (!seg.bare){
+    const edge=w/2-0.35;
+    const nTree=Math.round(L/8 * (level.treeDensity||1));
+    for (let i=0;i<nTree;i++){
+      if (edge<1.25) break;
+      const t=makeTree(rng);
+      const x=seg.x+(rng()<0.5?-1:1)*(1.25+rng()*(edge-1.25));
+      t.position.set(x, gy, z0+0.8+rng()*(L-1.6));
+      t.rotation.y=rng()*Math.PI*2;
+      grp.add(t);
+    }
+    for (let i=0;i<Math.round(L/4);i++){
+      if (edge<1.1) break;
+      const f=rng()<0.5?makeFlower(rng):makeGrass(rng);
+      const x=seg.x+(rng()<0.5?-1:1)*(1.1+rng()*(edge-1.1));
+      f.position.set(x, gy, z0+0.5+rng()*(L-1));
+      grp.add(f);
+    }
+    if (seg.lantern && edge>1.2){
+      const la=makeLantern();
+      la.position.set(seg.x+(seg.lantern<0?-1:1)*(edge-0.15), gy, z0+L*0.35);
+      grp.add(la);
+    }
+  }
+  return grp;
+}
+
+/* gate: two pillars + lintel, adds hard colliders */
+function buildGate(gate, colliders){
+  const grp=new THREE.Group(); grp.rotation.z=gate.phi;
+  const m=mat(PAL.rock);
+  const gy=gate.gy||0;
+  [-1,1].forEach(s=>{
+    const p=new THREE.Mesh(new THREE.BoxGeometry(0.3,1.95,0.3), m);
+    p.position.set(s*1.7, gy+0.975, gate.z); p.castShadow=true; grp.add(p);
+    colliders.push(boxCollider(gate.phi, s*1.7-0.15, gy, gate.z-0.15, s*1.7+0.15, gy+1.95, gate.z+0.15, false));
+  });
+  const lin=new THREE.Mesh(new THREE.BoxGeometry(3.95,0.26,0.4), m);
+  lin.position.set(0, gy+2.05, gate.z); lin.castShadow=true; grp.add(lin);
+  colliders.push(boxCollider(gate.phi, -1.98, gy+1.92, gate.z-0.2, 1.98, gy+2.18, gate.z+0.2, false));
+  const bulb=new THREE.Mesh(new THREE.OctahedronGeometry(0.11,0),
+    new THREE.MeshStandardMaterial({ color:PAL.lantern, emissive:PAL.lantern, emissiveIntensity:1.5, flatShading:true }));
+  bulb.position.set(0, gy+1.82, gate.z); grp.add(bulb);
+  return grp;
+}
+
+/* ============================== colliders ============================== */
+function boxCollider(phi, x0,y0,z0, x1,y1,z1, soft){
+  return { sphere:false, phi, c:Math.cos(phi), s:Math.sin(phi),
+           min:V3(x0,y0,z0), max:V3(x1,y1,z1), soft:!!soft };
+}
+function sphereCollider(phi, x,y,z, r){
+  const cph=Math.cos(phi), sph=Math.sin(phi);
+  return { sphere:true, r, soft:false, phi,
+           c:V3(x*cph - y*sph, x*sph + y*cph, z) };
+}
+
+/* ============================== levels ============================== */
+function buildLevels(){
+  const L=[];
+  function segs(list, defW){
+    return list.map(a=>({ z:a[0], len:a[1], phi:(a[2]||0)*DEG, w:a[3]||defW, gy:a[4]||0,
+                          x:0, lantern:a[5]||0 }));
+  }
+  // 1 — The First Step
+  L.push({
+    name:'The First Step', hint:'drag ⟷ to turn her world · soft landings keep her asleep',
+    seed:11, treeDensity:1.1, w:5.0,
+    segs:segs([[0,14,0],[15.8,10,0],[27.8,9,35],[38.6,11,35,5.4,0,1]], 5.0),
+    bed:{ seg:3, off:8.2 }, rocks:[], gates:[],
+  });
+  // 2 — Turning in Sleep
+  {
+    const list=[[0,12,0],[14,10,30,0,0,1],[26,10,60,0,0,-1]];
+    for (let k=0;k<6;k++) list.push([38.2+2.2*k, 2.2, 78+18*k, 3.6, 0, (k%3===0)?1:0]);
+    list.push([53.2,12,168,5.2,0,1]);
+    L.push({
+      name:'Turning in Sleep', hint:'keep turning as she walks — the path spirals away',
+      seed:22, treeDensity:1.2, w:4.4,
+      segs:segs(list, 4.4),
+      bed:{ seg:list.length-1, off:9 }, rocks:[],
+      gates:[{ phi:60*DEG, z:31, gy:0 }],
+    });
+  }
+  // 3 — Falling Upward
+  L.push({
+    name:'Falling Upward', hint:'let her fall a moment… then turn the world over',
+    seed:33, treeDensity:0.6, w:4.6,
+    segs:segs([[0,12,0],[13.8,7,0],[24,16,180,10],[41.8,9,180,0,0,1],[52.6,11,180,5.2]], 4.6),
+    bed:{ seg:4, off:8 },
+    rocks:[{ phi:0, x:-3.4, y:-2.6, z:22.5, r:1.3 },{ phi:0, x:3.2, y:2.4, z:23.5, r:1.1 },
+           { phi:0, x:-2.8, y:3.0, z:26, r:0.9 }],
+    gates:[],
+  });
+  // 4 — The Winding Stair
+  {
+    const list=[[0,8,0,0,0,1]];
+    let ph=0;
+    for (let k=0;k<20;k++){
+      ph+=18;
+      const short = (k===9 || k===15);   // short steps leave small gaps inside the helix
+      list.push([9.8+2.2*k, short?1.0:2.2, ph, 3.4, 0, (!short && k%3===0)?1:0]);
+    }
+    list.push([55.6,12,ph,5.2,0,-1]);
+    L.push({
+      name:'The Winding Stair', hint:'wind the stair beneath her feet — never stop turning',
+      seed:44, treeDensity:0.4, w:3.4,
+      segs:segs(list, 3.4),
+      bed:{ seg:list.length-1, off:9 }, rocks:[], gates:[],
+    });
+  }
+  // 5 — The Way Home
+  {
+    const list=[[0,10,0,0,0,1],[11.8,8,35],[21.8,8,70,0,0,-1]];
+    for (let k=0;k<10;k++) list.push([31+2*k, 2, 88+18*k, 3.4, 0, (k%3===1)?1:0]);
+    list.push([54,14,70,10]);
+    list.push([69.8,10,70,4.6,0,1]);
+    list.push([81.6,17,70,5.6,0,-1]);
+    L.push({
+      name:'The Way Home', hint:'everything you have learned — her bed waits at the end',
+      seed:55, treeDensity:1.3, w:4.4,
+      segs:segs(list, 4.4),
+      bed:{ seg:list.length-1, off:10 },
+      rocks:[{ phi:70*DEG, x:-2.6, y:-2.2, z:20.8, r:1.0 },{ phi:70*DEG, x:2.4, y:2.6, z:20.8, r:0.8 },
+             { phi:250*DEG, x:-3.2, y:-2.8, z:52.6, r:1.4 },{ phi:250*DEG, x:3.4, y:3.0, z:53.3, r:1.2 }],
+      gates:[{ phi:70*DEG, z:75, gy:0 }],
+    });
+  }
+  return L;
+}
+const LEVELS=buildLevels();
+
+/* ============================== game state ============================== */
+const G_ACC=13.0, WALK=3.0, R_GIRL=0.45, WAKE_V=12.0, VOID_R=60, SUB=1/120;
+
+let state='title';           // title | intro | play | woke | void | won | end
+let levelIndex=0, best=0;
+try { best = clamp(parseInt(localStorage.getItem('sw_best')||'0',10)||0, 0, 4); } catch(e){}
+
+let theta=0, thetaT=0;
+const gdir=V3(0,-1,0), up=V3(0,1,0), FWD=V3(0,0,1);
+const p=V3(0,0,0), v=V3(0,0,0), slide=V3(0,0,0);
+const groundN=V3(0,1,0);
+let groundT=99, airT=0, lastPhi=0;
+let colliders=[], levelGroup=null, bedPos=V3(0,0,0), segList=[];
+let playT=0, introT=0, wonT=0, failT=0, ovShown=false;
+let maxZ=0, stuckT=0;
+let chimeAcc=0, chimeDir=1;
+let autopilot=false, timescale=1;
+let camSnap=true;
+const camPos=V3(0,3,-8), camUp=V3(0,1,0);
+
+const girl=buildGirl();
+scene.add(girl.grp);
+let walkPhase=0, groundedVis=false;
+
+/* zzz sprites */
+const zzzs=[];
+function spawnZzz(scale){
+  const m=new THREE.SpriteMaterial({ map:zzzTex, transparent:true, opacity:0.9, depthWrite:false });
+  const s=new THREE.Sprite(m);
+  const u=up.clone();
+  s.position.copy(p).addScaledVector(u,0.75).addScaledVector(FWD,0.1);
+  s.scale.set(0.3,0.3,1);
+  scene.add(s);
+  zzzs.push({ s, life:0, vel:u.multiplyScalar(0.55).addScaledVector(FWD,0.12), grow:scale||1 });
+}
+let zzzTimer=0;
+
+/* clouds + big floating deco rocks */
+let clouds=[];
+function buildAmbient(rng, zMax){
+  const grp=new THREE.Group();
+  clouds=[];
+  for (let i=0;i<9;i++){
+    const puff=new THREE.Group();
+    const m=new THREE.MeshStandardMaterial({ color:PAL.cloud, roughness:1, flatShading:true,
+      transparent:true, opacity:0.75 });
+    const n=2+(rng()*2|0);
+    for (let k=0;k<n;k++){
+      const b=new THREE.Mesh(new THREE.IcosahedronGeometry(1.6+rng()*1.8,0), m);
+      b.position.set((rng()-0.5)*4,(rng()-0.5)*1,(rng()-0.5)*2.5);
+      b.scale.y=0.35; puff.add(b);
+    }
+    const c={ grp:puff, r:13+rng()*17, ang:rng()*Math.PI*2, z:rng()*zMax, spin:0.01+rng()*0.02 };
+    clouds.push(c); grp.add(puff);
+  }
+  for (let i=0;i<7;i++){
+    const rock=makeFloatRock(rng, 0.8+rng()*1.6);
+    const c={ grp:rock, r:10+rng()*14, ang:rng()*Math.PI*2, z:rng()*zMax, spin:0.008+rng()*0.02,
+              rot:rng()*0.3 };
+    clouds.push(c); grp.add(rock);
+  }
+  return grp;
+}
+
+/* ============================== level loading ============================== */
+const el = id=>document.getElementById(id);
+function disposeGroup(g){
+  g.traverse(o=>{
+    // sprites share one global quad in r128, and all maps here are shared
+    // module-level textures — dispose neither
+    if (o.geometry && !o.isSprite) o.geometry.dispose();
+    if (o.material) (Array.isArray(o.material)?o.material:[o.material]).forEach(m=>m.dispose());
+  });
+}
+function loadLevel(i){
+  levelIndex=i;
+  best=Math.max(best,i);
+  try{ localStorage.setItem('sw_best', String(best)); }catch(e){}
+  const L=LEVELS[i];
+  if (levelGroup){ scene.remove(levelGroup); disposeGroup(levelGroup); }
+  levelGroup=new THREE.Group(); scene.add(levelGroup);
+  const rng=mulberry32(L.seed);
+  colliders=[]; segList=L.segs;
+
+  for (const seg of L.segs){
+    levelGroup.add(buildSegment(seg, L, rng));
+    colliders.push(boxCollider(seg.phi, seg.x-seg.w/2, seg.gy-1.15, seg.z,
+                               seg.x+seg.w/2, seg.gy, seg.z+seg.len, false));
+  }
+  for (const r of (L.rocks||[])){
+    const m=makeFloatRock(rng, r.r*0.92);
+    const col=sphereCollider(r.phi, r.x, r.y, r.z, r.r);
+    m.position.copy(col.c);
+    levelGroup.add(m);
+    colliders.push(col);
+  }
+  for (const g of (L.gates||[])) levelGroup.add(buildGate(g, colliders));
+
+  // bed on its segment
+  const bseg=L.segs[L.bed.seg];
+  const bed=makeBedGroup();
+  const bg=new THREE.Group(); bg.rotation.z=bseg.phi;
+  bed.position.set(bseg.x, bseg.gy, bseg.z+L.bed.off);
+  bg.add(bed); levelGroup.add(bg);
+  const bp=V3(bseg.x, bseg.gy+0.7, bseg.z+L.bed.off);
+  bedPos.set(bp.x*Math.cos(bseg.phi)-bp.y*Math.sin(bseg.phi),
+             bp.x*Math.sin(bseg.phi)+bp.y*Math.cos(bseg.phi), bp.z);
+  // bed colliders (soft — the bed never wakes her)
+  const bz=bseg.z+L.bed.off;
+  colliders.push(boxCollider(bseg.phi, bseg.x-0.75, bseg.gy, bz-1.2, bseg.x+0.75, bseg.gy+0.75, bz+1.2, true));
+  colliders.push(boxCollider(bseg.phi, bseg.x-0.75, bseg.gy, bz+1.16, bseg.x+0.75, bseg.gy+1.35, bz+1.4, true));
+
+  const zMax=bseg.z+bseg.len;
+  levelGroup.add(buildAmbient(mulberry32(L.seed+7), zMax));
+
+  // girl to start
+  const s0=L.segs[0];
+  const start=V3(s0.x, s0.gy+R_GIRL-0.02, s0.z+1.3);
+  p.set(start.x*Math.cos(s0.phi)-start.y*Math.sin(s0.phi),
+        start.x*Math.sin(s0.phi)+start.y*Math.cos(s0.phi), start.z);
+  v.set(0,0,0); slide.set(0,0,0);
+  theta=thetaT=s0.phi; lastPhi=s0.phi;
+  groundT=0; airT=0; groundN.set(-Math.sin(s0.phi), Math.cos(s0.phi), 0);
+  playT=0; introT=0; wonT=0; failT=0; ovShown=false;
+  maxZ=p.z; stuckT=0; el('stuck').classList.remove('show');
+  girl.eyes.forEach(e=>e.visible=false);
+  girl.lashes.forEach(l=>l.visible=true);
+  camSnap=true;
+  for (const z of zzzs){ scene.remove(z.s); z.s.material.dispose(); }
+  zzzs.length=0;
+
+  el('hudLevel').textContent = 'dream '+(i+1)+' — '+L.name;
+  showHint(L.hint);
+  el('introNum').textContent = 'dream '+(i+1)+' of '+LEVELS.length;
+  el('introName').textContent = L.name;
+}
+
+/* ============================== overlays / state flow ============================== */
+let hintTimer=0, introTimer=0;
+function showHint(text){
+  if (text) el('hudHint').textContent = text;
+  el('hudHint').classList.remove('faded');
+  clearTimeout(hintTimer);
+  hintTimer = setTimeout(()=>el('hudHint').classList.add('faded'), 7000);
+}
+function showIntroCard(){
+  el('intro').classList.add('show');
+  clearTimeout(introTimer);
+  introTimer = setTimeout(()=>el('intro').classList.remove('show'), 2800);
+}
+function showOv(t,s,inst,prm){
+  el('ovT').textContent=t; el('ovS').textContent=s;
+  el('ovI').innerHTML=inst||''; el('ovP').textContent=prm||'';
+  el('ov').classList.add('show');
+  ovShown=true;
+}
+function hideOv(){ el('ov').classList.remove('show'); ovShown=false; }
+
+function startDream(){
+  audioInit();
+  hideOv();
+  state='intro'; introT=0;
+  showHint();          // re-arm the hint the boot-time load started fading
+  showIntroCard();
+}
+function beginIntroFor(i){
+  audioInit();         // number-key starts must also unlock audio
+  hideOv();            // never leave a stale fail overlay over the new attempt
+  loadLevel(i);
+  state='intro'; introT=0;
+  showIntroCard();
+}
+const WOKE_SUBS=[ 'Too hard a landing for so soft a dream.',
+  'The dream shattered like glass.', 'Some bruises reach into sleep.' ];
+const VOID_SUBS=[ 'The dream drifted beyond the moon’s reach.',
+  'She fell past the last of the islands.', 'The night is very large, and she is very small.' ];
+function fail(kind){
+  if (state!=='play') return;
+  state=kind; failT=0;
+  if (kind==='woke'){ sfxWake();
+    girl.eyes.forEach(e=>e.visible=true); girl.lashes.forEach(l=>l.visible=false);
+  } else sfxVoid();
+}
+function win(){
+  if (state!=='play') return;
+  state='won'; wonT=0; sfxWin();
+  for (let i=0;i<6;i++) setTimeout(()=>spawnZzz(1.4), i*140);
+}
+function retry(){ beginIntroFor(levelIndex); }
+
+function showTitle(){
+  state='title';
+  showOv('S L E E P W A L K E R',
+    'she cannot be steered — only the world can turn',
+    'she walks on her own, fast asleep<br>' +
+    'drag ⟷ (or ← →) to rotate the world’s gravity<br>' +
+    'guide her to her bed · soft landings only · don’t let her fall' +
+    (best>0 ? '<br><br>press 1–'+(best+1)+' to revisit a dream' : ''),
+    'click to begin the dream');
+}
+
+/* ============================== input ============================== */
+let dragging=false, lastX=0, keyRot=0;
+canvas.addEventListener('pointerdown', e=>{
+  if (state==='title'){ startDream(); return; }
+  if ((state==='woke'||state==='void') && ovShown){ retry(); return; }
+  if (state==='end' && ovShown){ beginIntroFor(0); return; }
+  dragging=true; lastX=e.clientX; canvas.classList.add('dragging');
+  canvas.setPointerCapture && canvas.setPointerCapture(e.pointerId);
+});
+window.addEventListener('pointermove', e=>{
+  if (!dragging) return;
+  const dx=e.clientX-lastX; lastX=e.clientX;
+  if (state==='play'||state==='intro') thetaT += dx*0.0052;
+});
+window.addEventListener('pointerup', ()=>{ dragging=false; canvas.classList.remove('dragging'); });
+window.addEventListener('pointercancel', ()=>{ dragging=false; canvas.classList.remove('dragging'); });
+window.addEventListener('wheel', e=>{
+  if (state==='play'||state==='intro') thetaT += Math.sign(e.deltaY)*0.12;
+}, { passive:true });
+window.addEventListener('contextmenu', e=>e.preventDefault());
+window.addEventListener('keydown', e=>{
+  const k=e.key.toLowerCase();
+  if (k==='arrowleft'||k==='a') keyRot=-1;
+  if (k==='arrowright'||k==='d') keyRot=1;
+  if (k==='m'){ setMute(!AU.muted); }
+  if (k==='r'){
+    if (state==='play'||state==='woke'||state==='void') retry();
+    else if (state==='end') beginIntroFor(0);
+  }
+  if (k===' '||k==='enter'){
+    if (state==='title') startDream();
+    else if ((state==='woke'||state==='void')&&ovShown) retry();
+    else if (state==='end'&&ovShown) beginIntroFor(0);
+  }
+  if (k>='1' && k<='5'){
+    const idx=parseInt(k,10)-1;
+    if (idx<=best && (state==='play'||state==='title'||state==='end'||state==='intro')) beginIntroFor(idx);
+  }
+});
+window.addEventListener('keyup', e=>{
+  const k=e.key.toLowerCase();
+  if (k==='arrowleft'||k==='a'||k==='arrowright'||k==='d') keyRot=0;
+});
+
+/* ============================== autopilot (debug/self-test) ============================== */
+function autopilotStep(){
+  if (state!=='play') return;
+  let tphi=null;
+  const walkable = groundT<0.06;
+  if (walkable) tphi=lastPhi;
+  else {
+    let next=null;
+    for (const s of segList){
+      if (s.z+s.len > p.z+0.3 && (!next || s.z<next.z)) next=s;
+    }
+    if (next){
+      const d=wrapPi(next.phi-theta);
+      if (Math.abs(d)>1.75 && v.dot(up)>-3.0) tphi=null;          // flip: wait until she is truly falling
+      else if (Math.abs(d)>0.45 && p.z<next.z-1.0) tphi=null;     // moderate turn: rotate at the lip, not before
+      else tphi=next.phi;
+    }
+  }
+  if (tphi!==null) thetaT = theta + wrapPi(tphi-theta);
+}
+
+/* ============================== physics ============================== */
+const _n=V3(0,0,0), _t1=V3(0,0,0), _t2=V3(0,0,0), _t3=V3(0,0,0);
+function collide(h){
+  let groundedNow=false;
+  // (returns whether she touched walkable ground this substep)
+  for (const c of colliders){
+    let nx,ny,nz,push;
+    if (c.sphere){
+      _t1.copy(p).sub(c.c);
+      const d=_t1.length(), rr=c.r+R_GIRL;
+      if (d>=rr || d<1e-6) continue;
+      nx=_t1.x/d; ny=_t1.y/d; nz=_t1.z/d; push=rr-d;
+    } else {
+      const lx =  c.c*p.x + c.s*p.y, ly = -c.s*p.x + c.c*p.y, lz = p.z;
+      const cx=clamp(lx,c.min.x,c.max.x), cy=clamp(ly,c.min.y,c.max.y), cz=clamp(lz,c.min.z,c.max.z);
+      let dx=lx-cx, dy=ly-cy, dz=lz-cz;
+      const d2=dx*dx+dy*dy+dz*dz;
+      if (d2 >= R_GIRL*R_GIRL) continue;
+      let nlx,nly,nlz;
+      if (d2 > 1e-9){
+        const d=Math.sqrt(d2); nlx=dx/d; nly=dy/d; nlz=dz/d; push=R_GIRL-d;
+      } else {
+        // center inside the box — exit through nearest face
+        const exs=[ lx-c.min.x, c.max.x-lx, ly-c.min.y, c.max.y-ly, lz-c.min.z, c.max.z-lz ];
+        let mi=0; for (let k=1;k<6;k++) if (exs[k]<exs[mi]) mi=k;
+        nlx=(mi===0?-1:mi===1?1:0); nly=(mi===2?-1:mi===3?1:0); nlz=(mi===4?-1:mi===5?1:0);
+        push=exs[mi]+R_GIRL;
+      }
+      nx = c.c*nlx - c.s*nly; ny = c.s*nlx + c.c*nly; nz = nlz;
+    }
+    _n.set(nx,ny,nz);
+    const approach = -v.dot(_n);
+    if (approach > WAKE_V && !c.soft && state==='play'){ fail('woke'); }
+    else if (approach > 6 && state==='play') thump((approach-5)/WAKE_V);
+    if (window.__impacts && approach > 6) window.__impacts.push({ z:+p.z.toFixed(1), a:+approach.toFixed(1), soft:c.soft });
+    p.addScaledVector(_n, push);
+    const vn=v.dot(_n);
+    if (vn<0) v.addScaledVector(_n, -vn);
+    if (_n.dot(up) > 0.5 && Math.abs(_n.z) < 0.35){
+      // (|n.z| filter: front/back edge corners are not ground — she walks straight
+      //  off the lip at full speed instead of rolling around it)
+      groundedNow=true;
+      groundN.copy(_n);
+      if (!c.sphere) lastPhi=c.phi;
+      if (airT > 0.12){
+        // landing: keep lateral momentum as slide
+        _t1.set(_n.y, -_n.x, 0);
+        if (_t1.lengthSq()>1e-6){ _t1.normalize(); slide.copy(_t1).multiplyScalar(v.dot(_t1)); }
+        else slide.set(0,0,0);
+      }
+      airT=0;
+    }
+  }
+  if (groundedNow) groundT=0;
+  return groundedNow;
+}
+
+function physStep(h){
+  // gravity vector from theta
+  const dRaw=(thetaT-theta)*(1-Math.exp(-10*h));
+  const d=clamp(dRaw, -7.0*h, 7.0*h);
+  theta+=d;
+  chimeAcc+=Math.abs(d);
+  if (Math.abs(d)>1e-5) chimeDir=Math.sign(d);
+  if (chimeAcc>0.3){ chimeAcc=0; chime(chimeDir); }
+  gdir.set(Math.sin(theta), -Math.cos(theta), 0);
+  up.copy(gdir).multiplyScalar(-1);
+
+  const moving = (state==='play') || (state==='won') || (state==='woke') || (state==='void');
+  if (!moving){ collide(h); return; }
+
+  const walkable = groundT<0.06 && groundN.dot(up)>0.5;
+  const canWalk = state==='play' && walkable;
+  if (canWalk){
+    const n=groundN;
+    _t1.copy(FWD).addScaledVector(n, -n.z);              // forward projected on ground
+    if (_t1.lengthSq()<0.05) _t1.copy(FWD);
+    _t1.normalize();
+    _t2.copy(gdir).multiplyScalar(G_ACC).addScaledVector(n, -n.dot(gdir)*G_ACC); // tangential g
+    slide.addScaledVector(_t2, h);
+    // the dream guides her: gentle drift back toward the path's center line
+    _t3.set(n.y, -n.x, 0);
+    if (_t3.lengthSq()>0.5) slide.addScaledVector(_t3, -p.dot(_t3)*3.5*h);
+    slide.addScaledVector(n, -slide.dot(n));
+    slide.multiplyScalar(Math.exp(-5.0*h));
+    const ramp=clamp(playT/0.7, 0, 1);
+    v.copy(_t1).multiplyScalar(WALK*ramp).add(slide).addScaledVector(n, -0.9);
+  } else if (walkable && (state==='woke')){
+    // she stands still, awake and confused
+    slide.multiplyScalar(Math.exp(-6*h));
+    v.copy(slide).addScaledVector(groundN, -0.9);
+  } else if (walkable && state==='won'){
+    slide.multiplyScalar(Math.exp(-6*h));
+    v.copy(slide).addScaledVector(groundN, -0.9);
+  } else {
+    v.addScaledVector(gdir, G_ACC*h);
+    // her gown catches the dream-air: damp drift that is sideways to both
+    // gravity and the path (kills the big lateral drift during world-flips)
+    _t3.set(-Math.cos(theta), -Math.sin(theta), 0);
+    v.addScaledVector(_t3, -v.dot(_t3)*Math.min(1, 1.5*h));
+    v.clampLength(0, 34);
+  }
+  p.addScaledVector(v, h);
+  groundT+=h; airT+=h;
+  const groundedNow = collide(h);
+  if (window.__edgeLog && state==='play' && p.z>13 && p.z<16.5)
+    window.__edgeLog.push([+p.z.toFixed(3),+p.y.toFixed(3),+groundT.toFixed(3),canWalk?1:0,groundedNow?1:0,+groundN.dot(up).toFixed(2)]);
+  // dream-skip: a soft hop as she steps off an edge, so small gaps are crossable
+  if (canWalk && !groundedNow){
+    const vu=v.dot(up);
+    v.addScaledVector(up, 4.4-Math.min(vu,0));   // cancel any corner-roll sink, then hop
+    if (window.__hopLog) window.__hopLog.push({z:+p.z.toFixed(2), y:+p.y.toFixed(2), vu:+vu.toFixed(2)});
+    groundT=1;   // commit to the air — no coyote-walking after the hop
+  }
+
+  if (window.__trace && window.__hopLog && window.__hopLog.length>=window.__traceAfterHop)
+    window.__trace.push([+p.x.toFixed(2),+p.y.toFixed(2),+p.z.toFixed(2),+theta.toFixed(3),+thetaT.toFixed(3),+v.x.toFixed(1),+v.y.toFixed(1),+v.z.toFixed(1)]);
+  if (state==='play'){
+    if (p.x*p.x + p.y*p.y > VOID_R*VOID_R) fail('void');
+    _t1.copy(p).sub(bedPos);
+    if (_t1.length() < 1.9) win();
+  }
+}
+
+/* ============================== per-frame update ============================== */
+const clock=new THREE.Clock();
+let acc=0, T=0;
+const _m4=new THREE.Matrix4(), _R=V3(1,0,0), _look=V3(0,0,0), _q=new THREE.Quaternion();
+
+function update(rdt){
+  T+=rdt;
+  let ts=timescale;
+  if ((state==='woke'||state==='void') && failT<0.9) ts*=0.3;
+  const dt=rdt*ts;
+
+  // key rotation
+  if (keyRot!==0 && (state==='play'||state==='intro')) thetaT += keyRot*4.5*dt;
+  if (autopilot) autopilotStep();
+
+  // state timers
+  if (state==='intro'){ introT+=dt; if (introT>1.3){ state='play'; playT=0; } }
+  if (state==='play') playT+=dt;
+  if (state==='woke'||state==='void'){
+    failT+=rdt;
+    if (failT>1.1 && !ovShown){
+      if (state==='woke') showOv('She woke up.', WOKE_SUBS[(Math.random()*WOKE_SUBS.length)|0], '', 'click — dream again');
+      else showOv('Lost in the endless night.', VOID_SUBS[(Math.random()*VOID_SUBS.length)|0], '', 'click — dream again');
+    }
+  }
+  if (state==='won'){
+    wonT+=rdt;
+    if (wonT>0.7 && !ovShown){
+      if (levelIndex+1>=LEVELS.length)
+        showOv('Home at last.', 'She never knew how far she walked.',
+               'thank you for keeping her asleep', 'press R to dream it all again');
+      else showOv('She sleeps on…', 'dream '+(levelIndex+2)+' of '+LEVELS.length+' approaches', '', '');
+    }
+    if (wonT>2.6){
+      if (levelIndex+1>=LEVELS.length){ state='end'; }
+      else { hideOv(); beginIntroFor(levelIndex+1); }
+    }
+  }
+
+  // physics substeps
+  if (state!=='title'){
+    acc+=dt;
+    const maxSteps=Math.max(8, Math.ceil(ts*8));
+    let steps=0;
+    while (acc>=SUB && steps<maxSteps){ physStep(SUB); acc-=SUB; steps++; }
+    if (steps>=maxSteps) acc=0;
+  } else {
+    theta+=(thetaT-theta)*(1-Math.exp(-10*dt));
+    gdir.set(Math.sin(theta), -Math.cos(theta), 0);
+    up.copy(gdir).multiplyScalar(-1);
+  }
+
+  // ---- girl visuals ----
+  _R.crossVectors(up, FWD).normalize();
+  _m4.makeBasis(_R, up, FWD);
+  _q.setFromRotationMatrix(_m4);
+  girl.grp.quaternion.slerp(_q, camSnap?1:clamp(14*rdt,0,1));
+  girl.grp.position.copy(p);
+
+  const walkable = groundT<0.06;
+  groundedVis = lerp(groundedVis?1:0, walkable?1:0, 0.2)>0.5;
+  const wSpeed = (state==='play' && walkable) ? 1 : 0;
+  walkPhase += dt* (wSpeed? 7.4 : 1.2);
+  const aw = clamp((walkable?0:airT*3), 0, 1);   // airborne blend
+  if (state==='woke'){
+    girl.armL.rotation.x = lerp(girl.armL.rotation.x, -1.4, 0.12);
+    girl.armR.rotation.x = lerp(girl.armR.rotation.x, -1.4, 0.12);
+    girl.legL.rotation.x = lerp(girl.legL.rotation.x, 0, 0.2);
+    girl.legR.rotation.x = lerp(girl.legR.rotation.x, 0, 0.2);
+  } else {
+    const swing=Math.sin(walkPhase)*0.55*wSpeed;
+    girl.legL.rotation.x = lerp(girl.legL.rotation.x, swing + aw*0.35, 0.35);
+    girl.legR.rotation.x = lerp(girl.legR.rotation.x, -swing + aw*0.15, 0.35);
+    girl.armL.rotation.x = 0.12 + Math.sin(walkPhase*0.5)*0.05 + aw*-0.25;
+    girl.armR.rotation.x = 0.12 + Math.cos(walkPhase*0.5)*0.05 + aw*-0.25;
+  }
+  girl.root.position.y = -0.52 + Math.abs(Math.sin(walkPhase))*0.045*wSpeed;
+  girl.root.rotation.z = Math.sin(walkPhase*0.5)*0.03*wSpeed + (state==='title'?Math.sin(T*0.7)*0.03:0);
+  const flare=1+aw*0.18;
+  girl.gown.scale.set(flare,1,flare);
+
+  // zzz
+  if (state!=='woke'){
+    zzzTimer-=rdt;
+    if (zzzTimer<=0 && state!=='title'){ spawnZzz(1); zzzTimer=1.7+Math.random()*0.9; }
+  }
+  for (let i=zzzs.length-1;i>=0;i--){
+    const z=zzzs[i]; z.life+=rdt;
+    z.s.position.addScaledVector(z.vel, rdt);
+    const sc=(0.25+z.life*0.32)*z.grow;
+    z.s.scale.set(sc,sc,1);
+    z.s.material.opacity=Math.max(0, 0.9-z.life*0.42);
+    if (z.life>2.3){ scene.remove(z.s); z.s.material.dispose(); zzzs.splice(i,1); }
+  }
+
+  // stuck detector
+  if (state==='play' && walkable){
+    if (p.z>maxZ+0.25){ maxZ=p.z; stuckT=0; el('stuck').classList.remove('show'); }
+    else { stuckT+=rdt; if (stuckT>4.5) el('stuck').classList.add('show'); }
+  } else { el('stuck').classList.remove('show'); }
+
+  // ---- camera ----
+  if (state==='title'){
+    const a=T*0.22;
+    _look.copy(p);
+    camPos.set(p.x+Math.cos(a)*6.5, p.y+2.4, p.z+Math.sin(a)*6.5);
+    camUp.lerp(V3(0,1,0), 0.05).normalize();
+    camera.position.copy(camPos);
+    camera.up.copy(camUp);
+    camera.lookAt(_look.x, _look.y+0.8, _look.z);
+  } else {
+    _t1.copy(p).addScaledVector(up,2.35).addScaledVector(FWD,-7.0);
+    const k=camSnap?1:clamp(4.5*rdt,0,1);
+    camPos.lerp(_t1,k);
+    camUp.lerp(up, camSnap?1:clamp(6*rdt,0,1)).normalize();
+    camera.position.copy(camPos);
+    camera.up.copy(camUp);
+    _look.copy(p).addScaledVector(up,1.0).addScaledVector(FWD,3.6);
+    camera.lookAt(_look);
+    camSnap=false;
+  }
+
+  // sky follows camera; shadow light follows girl
+  sky.position.copy(camera.position);
+  dl.position.copy(p).addScaledVector(moonDir,45);
+  dl.target.position.copy(p);
+
+  // motes drift along current "up"
+  const mp=moteGeo.attributes.position;
+  for (let i=0;i<MOTES;i++){
+    const mv=moteVel[i];
+    let x=mp.getX(i)+up.x*mv.sp*rdt + Math.sin(T*0.6+mv.ph)*0.003;
+    let y=mp.getY(i)+up.y*mv.sp*rdt + Math.cos(T*0.5+mv.ph)*0.003;
+    let z=mp.getZ(i)+up.z*mv.sp*rdt;
+    // recycle around the girl
+    if (x-p.x>28) x-=56; if (x-p.x<-28) x+=56;
+    if (y-p.y>28) y-=56; if (y-p.y<-28) y+=56;
+    if (z-p.z>46) z-=92; if (z-p.z<-46) z+=92;
+    mp.setXYZ(i,x,y,z);
+  }
+  mp.needsUpdate=true;
+
+  // clouds/rocks orbit slowly
+  for (const c of clouds){
+    c.ang+=c.spin*rdt;
+    c.grp.position.set(Math.cos(c.ang)*c.r, Math.sin(c.ang)*c.r, c.z);
+    if (c.rot!==undefined) c.grp.rotation.y+=c.rot*rdt*0.3;
+  }
+
+  // stars twinkle
+  for (let i=0;i<starMats.length;i++)
+    starMats[i].opacity = 0.55+0.3*Math.sin(T*(0.7+i*0.4)+i*2.1);
+
+  // dial
+  el('dialg').setAttribute('transform', 'rotate('+(-theta/DEG)+')');
+}
+
+function animate(){
+  requestAnimationFrame(animate);
+  update(Math.min(clock.getDelta(), 0.05));
+  melodyTick();
+  renderer.render(scene, camera);
+}
+
+/* ============================== debug handle ============================== */
+window.SW = {
+  state: ()=>({ state, level:levelIndex, p:[+p.x.toFixed(2),+p.y.toFixed(2),+p.z.toFixed(2)],
+                v:+v.length().toFixed(2), theta:+(theta/DEG).toFixed(1),
+                grounded:groundT<0.06, best }),
+  begin: ()=>{ if (state==='title') startDream(); },
+  warp: n=>beginIntroFor(clamp(n,0,LEVELS.length-1)),
+  auto: b=>{ autopilot=!!b; },
+  ts: x=>{ timescale=clamp(x,0.1,8); },
+  push: (x,y,z)=>{ v.set(x,y,z); },
+  retry,
+  // headless driver: advance the full game loop without requestAnimationFrame
+  step: (n, dt)=>{ dt=dt||1/60; for (let i=0;i<n;i++) update(dt); return window.SW.state(); },
+  shot: (w, h, q)=>{
+    w=w||640; h=h||360;
+    renderer.setSize(w, h);
+    camera.aspect=w/h; camera.updateProjectionMatrix();
+    renderer.render(scene, camera);
+    return canvas.toDataURL('image/jpeg', q||0.6);
+  },
+};
+
+/* ============================== go ============================== */
+loadLevel(0);
+showTitle();
+animate();
+</script>
+</body>
+</html>
