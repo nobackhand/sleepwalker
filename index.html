@@ -357,7 +357,7 @@ function trailEmit(){
 }
 
 /* ============================== audio ============================== */
-const AU = { ctx:null, master:null, muted:false, degree:4, nextNote:0, melDeg:2, delay:null };
+const AU = { ctx:null, master:null, muted:false, degree:4, nextNote:0, melDeg:2, delay:null, stepBuf:null };
 try { AU.muted = localStorage.getItem('sw_mute')==='1'; } catch(e){}
 function audioInit(){
   if (AU.ctx) { AU.ctx.resume && AU.ctx.resume(); return; }
@@ -424,6 +424,23 @@ function thump(strength){
   const lp=C.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=240;
   const g=C.createGain(); g.gain.value=clamp(strength,0,1)*0.5;
   src.connect(lp); lp.connect(g); g.connect(AU.master); src.start(t);
+}
+function footstep(vol){
+  // soft muffled pad step — barely there, lowpassed noise with random pitch
+  if (!AU.ctx || AU.muted) return;
+  const C=AU.ctx, t=C.currentTime;
+  if (!AU.stepBuf){
+    const len=(0.12*C.sampleRate)|0, buf=C.createBuffer(1,len,C.sampleRate), ch=buf.getChannelData(0);
+    for (let i=0;i<len;i++){ const e=1-i/len; ch[i]=(Math.random()*2-1)*e*e; }
+    AU.stepBuf=buf;
+  }
+  const src=C.createBufferSource(); src.buffer=AU.stepBuf;
+  src.playbackRate.value=0.8+Math.random()*0.5;
+  const lp=C.createBiquadFilter(); lp.type='lowpass';
+  lp.frequency.value=280+Math.random()*140; lp.Q.value=0.3;
+  const g=C.createGain(); g.gain.value=(0.02+Math.random()*0.012)*(vol||1);
+  src.connect(lp); lp.connect(g); g.connect(AU.master);
+  src.start(t);
 }
 function sfxWake(){
   if (!AU.ctx) return;
@@ -789,6 +806,7 @@ const camPos=V3(0,3,-8), camUp=V3(0,1,0);
 const girl=buildGirl();
 scene.add(girl.grp);
 let walkPhase=0, groundedVis=false;
+let camDip=0, landK=0, lastStepPh=0;   // landing camera weight / gown-hair spring / footstep phase
 
 /* zzz sprites */
 const zzzs=[];
@@ -802,6 +820,72 @@ function spawnZzz(scale){
   zzzs.push({ s, life:0, vel:u.multiplyScalar(0.55).addScaledVector(FWD,0.12), grow:scale||1 });
 }
 let zzzTimer=0;
+
+/* ============================== landing fx ============================== */
+/* collide() runs inside 1/120 substeps — it only queues events here; dust,
+   camera weight, and the gown/hair spring are consumed once per frame in
+   update(). Pooled ring — no per-frame or per-substep allocation. */
+const FX={ landN:0, land:[] };
+for (let i=0;i<6;i++) FX.land.push({ a:0, x:0, y:0, z:0, nx:0, ny:0, nz:0 });
+
+const DUST_N=96;
+const dustGeo=new THREE.BufferGeometry();
+const dustPos=new Float32Array(DUST_N*3), dustColA=new Float32Array(DUST_N*3);
+const dustVel=new Float32Array(DUST_N*3), dustLife=new Float32Array(DUST_N);
+for (let i=0;i<DUST_N;i++) dustPos[i*3+1]=-999;
+dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPos,3));
+dustGeo.setAttribute('color', new THREE.BufferAttribute(dustColA,3));
+const dust=new THREE.Points(dustGeo, new THREE.PointsMaterial({ size:0.14, map:dotTex,
+  vertexColors:true, transparent:true, opacity:1, depthWrite:false,
+  blending:THREE.AdditiveBlending, sizeAttenuation:true }));
+dust.frustumCulled=false;   // pooled positions move far from the initial bounds
+scene.add(dust);
+let dustHead=0;
+const DUST_C=new THREE.Color(0xd9cdea);   // pale lavender — matches the moted night
+const _dn=V3(0,0,0), _dr1=V3(0,0,0), _dr2=V3(0,0,0);
+function spawnDust(e, k){
+  _dn.set(e.nx,e.ny,e.nz);
+  _dr1.set(_dn.y, -_dn.x, 0);                       // tangent basis on the landing surface
+  if (_dr1.lengthSq()<1e-4) _dr1.set(1,0,0);
+  _dr1.normalize();
+  _dr2.crossVectors(_dn,_dr1);
+  const n=(8+18*k)|0, spd=0.7+1.7*k;
+  for (let j=0;j<n;j++){
+    const i=dustHead; dustHead=(dustHead+1)%DUST_N;
+    const a=(j/n)*Math.PI*2 + Math.random()*0.5;
+    const cx=Math.cos(a), sx=Math.sin(a), r=0.12+Math.random()*0.1;
+    const tx=_dr1.x*cx+_dr2.x*sx, ty=_dr1.y*cx+_dr2.y*sx, tz=_dr1.z*cx+_dr2.z*sx;
+    dustPos[i*3]  =e.x - e.nx*(R_GIRL-0.06) + tx*r;  // at her feet, on the surface
+    dustPos[i*3+1]=e.y - e.ny*(R_GIRL-0.06) + ty*r;
+    dustPos[i*3+2]=e.z - e.nz*(R_GIRL-0.06) + tz*r;
+    const s=spd*(0.55+Math.random()*0.7), lift=0.25+Math.random()*0.35;
+    dustVel[i*3]  =tx*s + e.nx*lift;                 // out along the ring, drifting off the ground
+    dustVel[i*3+1]=ty*s + e.ny*lift;
+    dustVel[i*3+2]=tz*s + e.nz*lift;
+    dustLife[i]=0.55+Math.random()*0.3+k*0.15;
+  }
+}
+function updateDust(rdt){
+  let any=false;
+  const damp=Math.exp(-3.2*rdt);
+  for (let i=0;i<DUST_N;i++){
+    if (dustLife[i]<=0) continue;
+    any=true;
+    dustLife[i]-=rdt;
+    dustVel[i*3]*=damp; dustVel[i*3+1]*=damp; dustVel[i*3+2]*=damp;
+    dustPos[i*3]+=dustVel[i*3]*rdt; dustPos[i*3+1]+=dustVel[i*3+1]*rdt; dustPos[i*3+2]+=dustVel[i*3+2]*rdt;
+    const f=clamp(dustLife[i]/0.55, 0, 1), b=f*f*0.85;   // additive: fading to black fades out
+    dustColA[i*3]=DUST_C.r*b; dustColA[i*3+1]=DUST_C.g*b; dustColA[i*3+2]=DUST_C.b*b;
+    if (dustLife[i]<=0){ dustPos[i*3+1]=-999; dustColA[i*3]=dustColA[i*3+1]=dustColA[i*3+2]=0; }
+  }
+  if (any){ dustGeo.attributes.position.needsUpdate=true; dustGeo.attributes.color.needsUpdate=true; }
+}
+function resetDust(){
+  dustLife.fill(0); dustColA.fill(0);
+  for (let i=0;i<DUST_N;i++) dustPos[i*3+1]=-999;
+  dustGeo.attributes.position.needsUpdate=true; dustGeo.attributes.color.needsUpdate=true;
+  dustHead=0;
+}
 
 /* clouds + big floating deco rocks */
 let clouds=[];
@@ -897,6 +981,8 @@ function loadLevel(i){
   for (const z of zzzs){ scene.remove(z.s); z.s.material.dispose(); }
   zzzs.length=0;
   trailReset();
+  camDip=0; landK=0; FX.landN=0; resetDust();
+  lastStepPh=Math.floor(walkPhase/Math.PI);
 
   el('hudLevel').textContent = 'dream '+(i+1)+' — '+L.name;
   showHint(L.hint);
@@ -1087,6 +1173,11 @@ function collide(h){
         _t1.set(_n.y, -_n.x, 0);
         if (_t1.lengthSq()>1e-6){ _t1.normalize(); slide.copy(_t1).multiplyScalar(v.dot(_t1)); }
         else slide.set(0,0,0);
+        // queue for the per-frame fx pass (dust / camera weight / gown spring)
+        if (approach > 2.5 && FX.landN < FX.land.length){
+          const e=FX.land[FX.landN++];
+          e.a=approach; e.x=p.x; e.y=p.y; e.z=p.z; e.nx=_n.x; e.ny=_n.y; e.nz=_n.z;
+        }
       }
       airT=0;
     }
@@ -1214,6 +1305,17 @@ function update(rdt){
     up.copy(gdir).multiplyScalar(-1);
   }
 
+  // ---- landing fx (events queued by collide() during substeps) ----
+  for (let i=0;i<FX.landN;i++){
+    const e=FX.land[i], k=clamp((e.a-2.5)/9, 0, 1);
+    spawnDust(e, k);
+    camDip=Math.min(0.4, camDip + 0.15 + k*0.25);
+    landK=Math.min(1, landK + 0.3 + k*0.7);
+    if (e.a<6 && (state==='play'||state==='won')) footstep(1.6+k);  // gentle touch-down pad; thump() already covers hard hits
+  }
+  FX.landN=0;
+  landK*=Math.exp(-5*rdt);
+
   // ---- girl visuals ----
   _R.crossVectors(up, FWD).normalize();
   _m4.makeBasis(_R, up, FWD);
@@ -1225,6 +1327,11 @@ function update(rdt){
   groundedVis = lerp(groundedVis?1:0, walkable?1:0, 0.2)>0.5;
   const wSpeed = (state==='play' && walkable) ? 1 : 0;
   walkPhase += dt* (wSpeed? 7.4 : 1.2);
+  const stepIx=Math.floor(walkPhase/Math.PI);   // sin(walkPhase) zero-crossing = foot plant
+  if (stepIx!==lastStepPh){
+    if (wSpeed===1 && playT>0.4) footstep(1);
+    lastStepPh=stepIx;
+  }
   const aw = clamp((walkable?0:airT*3), 0, 1);   // airborne blend
   if (state==='woke'){
     girl.armL.rotation.x = lerp(girl.armL.rotation.x, -1.4, 0.12);
@@ -1240,8 +1347,12 @@ function update(rdt){
   }
   girl.root.position.y = -0.52 + Math.abs(Math.sin(walkPhase))*0.045*wSpeed;
   girl.root.rotation.z = Math.sin(walkPhase*0.5)*0.03*wSpeed + (state==='title'?Math.sin(T*0.7)*0.03:0);
-  const flare=1+aw*0.18;
+  const flare=1+aw*0.18 + landK*0.22;
   girl.gown.scale.set(flare,1,flare);
+  // landing weight settles through her — head dips, bun lags, both drift back
+  girl.head.position.y = 0.92 - landK*0.05;
+  girl.head.rotation.x = landK*0.22;
+  girl.bun.position.set(0, 0.17 - landK*0.04, -0.14 - landK*0.05);
 
   // zzz
   if (state!=='woke'){
@@ -1256,6 +1367,7 @@ function update(rdt){
     z.s.material.opacity=Math.max(0, 0.9-z.life*0.42);
     if (z.life>2.3){ scene.remove(z.s); z.s.material.dispose(); zzzs.splice(i,1); }
   }
+  updateDust(rdt);
 
   // stuck detector
   if (state==='play' && walkable){
@@ -1277,7 +1389,10 @@ function update(rdt){
     const k=camSnap?1:clamp(4.5*rdt,0,1);
     camPos.lerp(_t1,k);
     camUp.lerp(up, camSnap?1:clamp(6*rdt,0,1)).normalize();
-    camera.position.copy(camPos);
+    // landing weight: a decaying dip applied on top of camPos, never stored into it
+    camDip*=Math.exp(-4*rdt);
+    if (camSnap) camDip=0;
+    camera.position.copy(camPos).addScaledVector(camUp, -camDip);
     camera.up.copy(camUp);
     _look.copy(p).addScaledVector(up,1.0).addScaledVector(FWD,3.6);
     camera.lookAt(_look);
