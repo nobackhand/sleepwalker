@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Sleepwalker</title>
 <style>
   html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:#0c0a1e;
@@ -14,12 +14,14 @@
   #vign { position:absolute; inset:0;
     background: radial-gradient(ellipse at center, rgba(0,0,0,0) 55%, rgba(10,6,24,0.55) 100%); }
 
-  #hud { position:absolute; top:18px; left:22px; opacity:0.92; }
+  #hud { position:absolute; top:max(18px, env(safe-area-inset-top));
+         left:max(22px, env(safe-area-inset-left)); opacity:0.92; }
   #hudLevel { font-style:italic; font-size:15px; letter-spacing:2.5px; color:#cabfe8; text-shadow:0 0 12px rgba(90,70,140,0.8); }
   #hudHint  { margin-top:5px; font-size:12.5px; letter-spacing:1.2px; color:#9d92c4; opacity:1;
               transition:opacity 2.5s ease; }
   #hudHint.faded { opacity:0; }
-  #hudKeys { position:absolute; top:18px; right:22px; text-align:right; font-size:12.5px;
+  #hudKeys { position:absolute; top:max(18px, env(safe-area-inset-top));
+             right:max(22px, env(safe-area-inset-right)); text-align:right; font-size:12.5px;
              letter-spacing:1.5px; color:#a89ecf; text-shadow:0 1px 6px rgba(8,5,20,0.9); }
   #hudBtns { position:absolute; top:52px; right:16px; display:flex; gap:8px; pointer-events:auto; }
   .hbtn { width:40px; height:40px; border-radius:50%; border:1px solid #54487e;
@@ -86,7 +88,7 @@
     </svg>
     <div id="dialLbl">the world</div>
   </div>
-  <div id="ov">
+  <div id="ov" aria-live="polite">
     <h1 id="ovT"></h1>
     <div id="ovS"></div>
     <div id="ovI"></div>
@@ -1068,9 +1070,17 @@ function fail(kind){
     girl.eyes.forEach(e=>e.visible=true); girl.lashes.forEach(l=>l.visible=false);
   } else sfxVoid();
 }
+const winStat={ t:0, best:0, record:false };
 function win(){
   if (state!=='play') return;
   state='won'; wonT=0; sfxWin();
+  winStat.t=playT; winStat.best=0; winStat.record=false;
+  try {
+    const prev=parseFloat(localStorage.getItem('sw_t'+levelIndex));
+    if (!prev || playT<prev){ winStat.record=true; winStat.best=playT;
+      localStorage.setItem('sw_t'+levelIndex, playT.toFixed(1)); }
+    else winStat.best=prev;
+  } catch(e){ winStat.best=playT; }
   for (let i=0;i<6;i++) setTimeout(()=>spawnZzz(1.4), i*140);
 }
 function retry(){ beginIntroFor(levelIndex); }
@@ -1321,7 +1331,7 @@ function physStep(h){
 
 /* ============================== per-frame update ============================== */
 const clock=new THREE.Clock();
-let acc=0, T=0;
+let acc=0, T=0, lastDialTheta=1e9;
 const _m4=new THREE.Matrix4(), _R=V3(1,0,0), _look=V3(0,0,0), _q=new THREE.Quaternion();
 
 function update(rdt){
@@ -1347,10 +1357,12 @@ function update(rdt){
   if (state==='won'){
     wonT+=rdt;
     if (wonT>0.7 && !ovShown){
+      const tLine='she crossed in '+winStat.t.toFixed(1)+'s'+
+        (winStat.record ? ' — her gentlest crossing yet' : ' · gentlest '+winStat.best.toFixed(1)+'s');
       if (levelIndex+1>=LEVELS.length)
         showOv('Home at last.', 'She never knew how far she walked.',
-               'thank you for keeping her asleep', 'press R to dream it all again');
-      else showOv('She sleeps on…', 'dream '+(levelIndex+2)+' of '+LEVELS.length+' approaches', '', '');
+               tLine+'<br>thank you for keeping her asleep', 'press R to dream it all again');
+      else showOv('She sleeps on…', 'dream '+(levelIndex+2)+' of '+LEVELS.length+' approaches', tLine, '');
     }
     if (wonT>2.6){
       if (levelIndex+1>=LEVELS.length){ state='end'; }
@@ -1547,8 +1559,11 @@ function update(rdt){
     A.mesh.material.opacity = A.op*(0.8+0.2*Math.sin(T*0.07+A.ph*1.7));
   }
 
-  // dial
-  el('dialg').setAttribute('transform', 'rotate('+(-theta/DEG)+')');
+  // dial (skip the SVG style recalc when the world isn't turning)
+  if (Math.abs(theta-lastDialTheta)>0.0005){
+    lastDialTheta=theta;
+    el('dialg').setAttribute('transform', 'rotate('+(-theta/DEG)+')');
+  }
 }
 
 function animate(){

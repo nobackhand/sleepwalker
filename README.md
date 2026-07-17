@@ -26,6 +26,8 @@ A 3D puzzle game in a single HTML file. You never touch her — she sleepwalks e
 
 - Three.js r128 (UMD, CDN), everything else procedural in one file: geometry, palette, WebAudio music-box lullaby, rotation chimes.
 - Soft landings only: impacts above the wake threshold end the dream.
+- Each dream remembers her gentlest crossing time (shown when she reaches the bed).
+- The night is alive: shooting stars, twin aurora ribbons, a dream-trail at her feet, landing dust and footsteps.
 - `window.SW` exposes a debug/autopilot API (`SW.warp(n)`, `SW.auto(true)`, `SW.step(frames)`) used to verify all 5 levels are completable headlessly.
 
 Built in one shot by Claude (Fable 5), 2026-07-16.
