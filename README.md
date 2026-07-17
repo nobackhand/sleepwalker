@@ -11,15 +11,16 @@ A 3D puzzle game in a single HTML file. You never touch her — she sleepwalks e
 | Drag ⟷ / ← → / scroll | Rotate the world's gravity |
 | R | Restart the dream |
 | M | Mute |
-| 1–5 | Replay unlocked dreams |
+| 1–6 | Replay unlocked dreams |
 
-## The five dreams
+## The six dreams
 
 1. **The First Step** — gaps and your first tilt
 2. **Turning in Sleep** — the path spirals away
 3. **Falling Upward** — let her fall, then turn the world over
 4. **The Winding Stair** — a lantern-lit helix
 5. **The Way Home** — everything, and her bed at the end
+6. **The Undertow** — a pendulum path that swings back on itself, and the sky crossed twice
 
 ## Notes
 

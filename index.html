@@ -779,6 +779,24 @@ function buildLevels(){
       gates:[{ phi:70*DEG, z:75, gy:0 }],
     });
   }
+  // 6 — The Undertow
+  {
+    const list=[[0,9,0,0,0,1],[11,7,30],[20,7,60,0,0,-1]];
+    for (let k=0;k<5;k++) list.push([29+2*k, 2, 38-22*k, 3.0, 0, (k===2)?1:0]);   // the swing out
+    for (let k=0;k<5;k++) list.push([41+2*k, 2, -28+22*k, 3.0, 0, (k===2)?1:0]); // the swing back
+    list.push([54.2,12,240,9]);            // first crossing of the sky
+    list.push([67.4,9,240,4.4,0,1]);       // the double gate
+    list.push([79.4,16,60,8,0,-1]);        // home again, one more fall away
+    L.push({
+      name:'The Undertow', hint:'the current swings her back and forth — and home lies twice across the sky',
+      seed:66, treeDensity:0.9, w:4.0,
+      segs:segs(list, 4.0),
+      bed:{ seg:list.length-1, off:10 },
+      rocks:[{ phi:240*DEG, x:-3.2, y:-2.6, z:52.8, r:1.2 },{ phi:240*DEG, x:3.0, y:2.8, z:53.6, r:1.0 },
+             { phi:60*DEG, x:-2.8, y:-2.4, z:77.6, r:1.1 },{ phi:60*DEG, x:2.6, y:2.6, z:78.4, r:0.9 }],
+      gates:[{ phi:240*DEG, z:70, gy:0 },{ phi:240*DEG, z:73.5, gy:0 }],
+    });
+  }
   return L;
 }
 const LEVELS=buildLevels();
@@ -788,7 +806,7 @@ const G_ACC=13.0, WALK=3.0, R_GIRL=0.45, WAKE_V=12.0, VOID_R=60, SUB=1/120;
 
 let state='title';           // title | intro | play | woke | void | won | end
 let levelIndex=0, best=0;
-try { best = clamp(parseInt(localStorage.getItem('sw_best')||'0',10)||0, 0, 4); } catch(e){}
+try { best = clamp(parseInt(localStorage.getItem('sw_best')||'0',10)||0, 0, LEVELS.length-1); } catch(e){}
 
 let theta=0, thetaT=0;
 const gdir=V3(0,-1,0), up=V3(0,1,0), FWD=V3(0,0,1);
@@ -1097,7 +1115,7 @@ window.addEventListener('keydown', e=>{
     else if ((state==='woke'||state==='void')&&ovShown) retry();
     else if (state==='end'&&ovShown) beginIntroFor(0);
   }
-  if (k>='1' && k<='5'){
+  if (k>='1' && k<='6'){
     const idx=parseInt(k,10)-1;
     if (idx<=best && state!=='won') beginIntroFor(idx);
   }
