@@ -19,8 +19,14 @@
   #hudHint  { margin-top:5px; font-size:12.5px; letter-spacing:1.2px; color:#9d92c4; opacity:1;
               transition:opacity 2.5s ease; }
   #hudHint.faded { opacity:0; }
-  #hudKeys { position:absolute; top:18px; right:22px; text-align:right; font-size:11.5px;
-             letter-spacing:1.5px; color:#7d74a6; }
+  #hudKeys { position:absolute; top:18px; right:22px; text-align:right; font-size:12.5px;
+             letter-spacing:1.5px; color:#a89ecf; text-shadow:0 1px 6px rgba(8,5,20,0.9); }
+  #hudBtns { position:absolute; top:52px; right:16px; display:flex; gap:8px; pointer-events:auto; }
+  .hbtn { width:40px; height:40px; border-radius:50%; border:1px solid #54487e;
+          background:rgba(20,14,40,0.55); color:#cabfe8; font-size:17px; line-height:38px;
+          text-align:center; cursor:pointer; user-select:none; -webkit-user-select:none;
+          font-family:Georgia, serif; }
+  .hbtn:active { background:rgba(52,40,86,0.75); }
 
   #dialWrap { position:absolute; bottom:20px; left:50%; transform:translateX(-50%);
               display:flex; flex-direction:column; align-items:center; gap:4px; opacity:0.85; }
@@ -30,7 +36,8 @@
   #stuck { position:absolute; bottom:96px; width:100%; text-align:center; font-style:italic;
            font-size:14px; color:#bfa9d8; opacity:0; transition:opacity 1.2s ease;
            text-shadow:0 0 10px rgba(0,0,0,0.6); }
-  #stuck.show { opacity:0.95; }
+  #stuck.show { opacity:0.95; pointer-events:auto; cursor:pointer; }
+  @media (prefers-reduced-motion: reduce){ #ovP { animation:none; opacity:0.8; } }
 
   #intro { position:absolute; top:34%; width:100%; text-align:center; opacity:0;
            transition:opacity 1.4s ease; }
@@ -62,6 +69,10 @@
     <div id="hudHint"></div>
   </div>
   <div id="hudKeys">drag / ← → &nbsp;turn the world<br>R restart · M sound</div>
+  <div id="hudBtns" class="hidden">
+    <div class="hbtn" id="btnRestart" title="restart">↻</div>
+    <div class="hbtn" id="btnMute" title="sound">♪</div>
+  </div>
   <div id="stuck">the dream resists… turn the world, or press R</div>
   <div id="intro"><div id="introNum"></div><div id="introName"></div></div>
   <div id="dialWrap">
@@ -150,9 +161,11 @@ const scene = new THREE.Scene();
 scene.fog = new THREE.FogExp2(PAL.fog, 0.0095);
 
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 900);
+if (camera.aspect < 1) camera.fov = 74;   // portrait: widen so the path ahead stays visible
 window.addEventListener('resize', ()=>{
   const w=Math.max(1,window.innerWidth), h=Math.max(1,window.innerHeight);
   camera.aspect = w/h;
+  camera.fov = camera.aspect < 1 ? 74 : 60;
   camera.updateProjectionMatrix();
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(w, h);
@@ -163,7 +176,8 @@ const hemi = new THREE.HemisphereLight(0x8d86c9, 0x3a2f55, 0.6); scene.add(hemi)
 const moonDir = V3(0.3, 0.38, 0.85).normalize();
 const dl = new THREE.DirectionalLight(0xcfd8ff, 0.85);
 dl.castShadow = true;
-dl.shadow.mapSize.set(2048, 2048);
+const SMALL_SCREEN = Math.min(window.screen.width, window.screen.height) < 700;
+dl.shadow.mapSize.set(SMALL_SCREEN?1024:2048, SMALL_SCREEN?1024:2048);
 dl.shadow.camera.left=-28; dl.shadow.camera.right=28;
 dl.shadow.camera.top=28; dl.shadow.camera.bottom=-28;
 dl.shadow.camera.near=1; dl.shadow.camera.far=140;
@@ -1069,7 +1083,7 @@ function showTitle(){
     'drag ⟷ (or ← →) to rotate the world’s gravity<br>' +
     'guide her to her bed · soft landings only · don’t let her fall' +
     (best>0 ? '<br><br>press 1–'+(best+1)+' to revisit a dream' : ''),
-    'click to begin the dream');
+    COARSE ? 'touch — begin the dream' : 'click or press space — begin the dream');
 }
 
 /* ============================== input ============================== */
@@ -1091,7 +1105,9 @@ canvas.addEventListener('pointerdown', e=>{
 window.addEventListener('pointermove', e=>{
   if (!dragging || e.pointerId!==dragId) return;
   const dx=e.clientX-lastX; lastX=e.clientX;
-  if (state==='play'||state==='intro') addRot(dx*0.0052);
+  // screen-relative: a full-width swipe is the same turn on a phone as on a
+  // desktop (0.0052/px at the 1280px reference width)
+  if (state==='play'||state==='intro') addRot(dx*6.66/Math.max(480, window.innerWidth));
 });
 window.addEventListener('pointerup', e=>{ if (e.pointerId===dragId) endDrag(); });
 window.addEventListener('pointercancel', e=>{ if (e.pointerId===dragId) endDrag(); });
@@ -1105,7 +1121,7 @@ window.addEventListener('keydown', e=>{
   const k=e.key.toLowerCase();
   if (k==='arrowleft'||k==='a') keyRot=-1;
   if (k==='arrowright'||k==='d') keyRot=1;
-  if (k==='m'){ setMute(!AU.muted); }
+  if (k==='m'){ setMute(!AU.muted); syncMuteBtn(); }
   if (k==='r'){
     if (state==='play'||state==='intro'||state==='woke'||state==='void') retry();
     else if (state==='end') beginIntroFor(0);
@@ -1123,6 +1139,33 @@ window.addEventListener('keydown', e=>{
 window.addEventListener('keyup', e=>{
   const k=e.key.toLowerCase();
   if (k==='arrowleft'||k==='a'||k==='arrowright'||k==='d') keyRot=0;
+});
+
+/* touch UI — keyboard-only actions need a tappable path on phones */
+const COARSE = window.matchMedia && window.matchMedia('(pointer:coarse)').matches;
+function syncMuteBtn(){ el('btnMute').textContent = AU.muted ? '∅' : '♪'; }
+if (COARSE){
+  el('hudBtns').classList.remove('hidden');
+  el('hudKeys').innerHTML = 'drag ⟷ &nbsp;turn the world';
+  syncMuteBtn();
+}
+el('btnRestart').addEventListener('pointerdown', e=>{
+  e.stopPropagation();
+  if (state==='play'||state==='intro'||state==='woke'||state==='void') retry();
+  else if (state==='end') beginIntroFor(0);
+});
+el('btnMute').addEventListener('pointerdown', e=>{
+  e.stopPropagation(); setMute(!AU.muted); syncMuteBtn();
+});
+el('stuck').addEventListener('pointerdown', e=>{
+  e.stopPropagation();
+  if (state==='play') retry();
+});
+
+/* a lost WebGL context otherwise leaves a permanently black canvas */
+canvas.addEventListener('webglcontextlost', e=>{
+  e.preventDefault();
+  showOv('The dream flickered out', 'the graphics context was lost — refresh to dream again', '', '');
 });
 
 /* ============================== autopilot (debug/self-test) ============================== */
