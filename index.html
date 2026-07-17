@@ -244,6 +244,64 @@ function zzzTexture(){
 }
 const zzzTex = zzzTexture();
 
+/* ============================== living night sky ============================== */
+/* shooting stars — one pooled streak of points swept along a great circle */
+const MET_N=26;
+const metGeo=new THREE.BufferGeometry();
+const metPos=new Float32Array(MET_N*3), metCol=new Float32Array(MET_N*3);
+metGeo.setAttribute('position', new THREE.BufferAttribute(metPos,3));
+metGeo.setAttribute('color', new THREE.BufferAttribute(metCol,3));
+const meteorPts=new THREE.Points(metGeo, new THREE.PointsMaterial({ size:2.4, map:dotTex,
+  vertexColors:true, transparent:true, opacity:0.9, sizeAttenuation:false,
+  blending:THREE.AdditiveBlending, fog:false, depthWrite:false }));
+meteorPts.frustumCulled=false; meteorPts.visible=false; sky.add(meteorPts);
+const meteor={ on:false, t:0, dur:1.4, span:0.8, a:V3(0,1,0), b:V3(0,0,1),
+               next:4+Math.random()*6 };
+function spawnMeteor(){
+  const a=meteor.a, b=meteor.b;
+  a.set(Math.random()*2-1, 0.2+Math.random()*0.75, Math.random()*2-1).normalize();
+  b.set(Math.random()*2-1, Math.random()*2-1, Math.random()*2-1).cross(a);
+  if (b.lengthSq()<0.05) b.set(0,0,1).cross(a);
+  b.normalize();
+  meteor.span=0.55+Math.random()*0.5;
+  meteor.dur=1.2+Math.random()*0.9;
+  meteor.t=0; meteor.on=true; meteorPts.visible=true;
+}
+
+/* aurora — two slow horizon ribbons; tileable canvas gradient, UV scroll */
+function auroraTexture(){
+  const cv=document.createElement('canvas'); cv.width=512; cv.height=256;
+  const cx=cv.getContext('2d');
+  const gr=cx.createLinearGradient(0,256,0,0);        // bottom → top
+  gr.addColorStop(0,'rgba(127,227,184,0)');
+  gr.addColorStop(0.14,'rgba(127,227,184,0.6)');
+  gr.addColorStop(0.5,'rgba(122,190,200,0.3)');
+  gr.addColorStop(0.82,'rgba(180,138,180,0.1)');
+  gr.addColorStop(1,'rgba(180,138,180,0)');
+  // periodic curtains (sums of sines → tiles seamlessly when scrolled);
+  // painted column-by-column via globalAlpha — destination-in would clear
+  // everything outside each 1px rect and leave the canvas fully transparent
+  for (let x=0;x<512;x++){
+    const t=x/512*Math.PI*2;
+    cx.globalAlpha=0.3+0.7*(0.5+0.5*Math.sin(t*3+1.7))*(0.5+0.5*Math.sin(t*7+0.4));
+    cx.fillStyle=gr; cx.fillRect(x,0,1,256);
+  }
+  cx.globalAlpha=1;
+  const tex=new THREE.CanvasTexture(cv); tex.wrapS=THREE.RepeatWrapping;
+  return tex;
+}
+const auroras=[];
+/* full rings — the world (and so the camera heading) rotates freely, an arc
+   would drift out of view; two counter-scrolling bands at different heights */
+[[386,120,0.75, 0.006],[358,92,0.55, -0.010]].forEach(([r,h,op,sp],i)=>{
+  const g=new THREE.CylinderGeometry(r,r,h,64,1,true);
+  const m=new THREE.MeshBasicMaterial({ map:auroraTexture(), transparent:true, opacity:op,
+    side:THREE.BackSide, blending:THREE.AdditiveBlending, fog:false, depthWrite:false });
+  const mesh=new THREE.Mesh(g,m); mesh.position.y=36+i*6; mesh.renderOrder=-9;
+  sky.add(mesh);
+  auroras.push({ mesh, tex:m.map, sp, op, ph:i*2.1 });
+});
+
 /* ============================== drifting motes ============================== */
 const MOTES=320;
 const moteGeo=new THREE.BufferGeometry();
@@ -262,6 +320,41 @@ const motes=new THREE.Points(moteGeo, new THREE.PointsMaterial({ size:0.16, map:
   vertexColors:true, transparent:true, opacity:0.7, depthWrite:false,
   blending:THREE.AdditiveBlending, sizeAttenuation:true }));
 scene.add(motes);
+
+/* ============================== dream trail ============================== */
+const TRAIL_N=240, TRAIL_LIFE=1.5;
+const trailGeo=new THREE.BufferGeometry();
+const trailPos=new Float32Array(TRAIL_N*3), trailCol=new Float32Array(TRAIL_N*3);
+const trailVel=new Float32Array(TRAIL_N*3), trailAge=new Float32Array(TRAIL_N);
+const trailBase=new Float32Array(TRAIL_N*3);
+trailAge.fill(TRAIL_LIFE+1);                          // born dead; colors init to 0
+trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPos,3));
+trailGeo.setAttribute('color', new THREE.BufferAttribute(trailCol,3));
+const trailPals=[new THREE.Color(0xcfc3ff), new THREE.Color(0xfff0f6), new THREE.Color(0xd6f5e3)];
+const trail=new THREE.Points(trailGeo, new THREE.PointsMaterial({ size:0.3, map:dotTex,
+  vertexColors:true, transparent:true, opacity:0.8, depthWrite:false,
+  blending:THREE.AdditiveBlending, sizeAttenuation:true }));
+trail.frustumCulled=false; scene.add(trail);
+let trailHead=0, trailAcc=0;
+const _tv=V3(0,0,0);
+function trailReset(){
+  trailAge.fill(TRAIL_LIFE+1); trailCol.fill(0);
+  trailGeo.attributes.color.needsUpdate=true;
+  trailHead=0; trailAcc=0;
+}
+function trailEmit(){
+  const i=trailHead; trailHead=(trailHead+1)%TRAIL_N;
+  _tv.copy(p).addScaledVector(up,-0.34);              // at her feet
+  trailPos[i*3]  =_tv.x+(Math.random()-0.5)*0.22;
+  trailPos[i*3+1]=_tv.y+(Math.random()-0.5)*0.22;
+  trailPos[i*3+2]=_tv.z+(Math.random()-0.5)*0.22;
+  trailVel[i*3]  =up.x*0.3+(Math.random()-0.5)*0.18;
+  trailVel[i*3+1]=up.y*0.3+(Math.random()-0.5)*0.18;
+  trailVel[i*3+2]=up.z*0.3-0.22+(Math.random()-0.5)*0.18;  // linger behind her (+z is forward)
+  const c=trailPals[(Math.random()*trailPals.length)|0];
+  trailBase[i*3]=c.r*0.8; trailBase[i*3+1]=c.g*0.8; trailBase[i*3+2]=c.b*0.8;
+  trailAge[i]=0;
+}
 
 /* ============================== audio ============================== */
 const AU = { ctx:null, master:null, muted:false, degree:4, nextNote:0, melDeg:2, delay:null };
@@ -803,6 +896,7 @@ function loadLevel(i){
   camSnap=true;
   for (const z of zzzs){ scene.remove(z.s); z.s.material.dispose(); }
   zzzs.length=0;
+  trailReset();
 
   el('hudLevel').textContent = 'dream '+(i+1)+' — '+L.name;
   showHint(L.hint);
@@ -1210,6 +1304,28 @@ function update(rdt){
   }
   mp.needsUpdate=true;
 
+  // dream trail — emit while she moves; particles always drift and fade
+  const tSpeed=v.length();
+  if ((state==='play'||state==='won') && tSpeed>1.2){
+    trailAcc+=rdt*clamp(tSpeed*5, 8, 30);
+    while (trailAcc>=1){ trailAcc-=1; trailEmit(); }
+  } else trailAcc=0;
+  for (let i=0;i<TRAIL_N;i++){
+    if (trailAge[i]>TRAIL_LIFE) continue;
+    trailAge[i]+=rdt;
+    const a=trailAge[i]; let f=0;
+    if (a<=TRAIL_LIFE){
+      trailPos[i*3]+=trailVel[i*3]*rdt; trailPos[i*3+1]+=trailVel[i*3+1]*rdt;
+      trailPos[i*3+2]+=trailVel[i*3+2]*rdt;
+      const tt=a/TRAIL_LIFE;
+      f=Math.min(1,a*8)*(1-tt)*(1-tt);               // quick fade-in, soft fade-out
+    }
+    trailCol[i*3]=trailBase[i*3]*f; trailCol[i*3+1]=trailBase[i*3+1]*f;
+    trailCol[i*3+2]=trailBase[i*3+2]*f;
+  }
+  trailGeo.attributes.position.needsUpdate=true;
+  trailGeo.attributes.color.needsUpdate=true;
+
   // clouds/rocks orbit slowly
   for (const c of clouds){
     c.ang+=c.spin*rdt;
@@ -1220,6 +1336,35 @@ function update(rdt){
   // stars twinkle
   for (let i=0;i<starMats.length;i++)
     starMats[i].opacity = 0.55+0.3*Math.sin(T*(0.7+i*0.4)+i*2.1);
+
+  // shooting stars
+  if (meteor.on){
+    meteor.t+=rdt;
+    const u=meteor.t/meteor.dur;
+    if (u>=1){ meteor.on=false; meteorPts.visible=false; meteor.next=6+Math.random()*8; }
+    else {
+      const env=Math.sin(u*Math.PI), head=u*meteor.span;
+      for (let i=0;i<MET_N;i++){
+        const ang=head-i*0.010, ca=Math.cos(ang), sa=Math.sin(ang);
+        metPos[i*3]  =(meteor.a.x*ca+meteor.b.x*sa)*395;
+        metPos[i*3+1]=(meteor.a.y*ca+meteor.b.y*sa)*395;
+        metPos[i*3+2]=(meteor.a.z*ca+meteor.b.z*sa)*395;
+        const f=(ang>0?1:0)*env*Math.pow(1-i/MET_N, 1.7);   // bright head, dim tail
+        metCol[i*3]=f*0.85; metCol[i*3+1]=f*0.82; metCol[i*3+2]=f;   // pale lavender-blue
+      }
+      metGeo.attributes.position.needsUpdate=true;
+      metGeo.attributes.color.needsUpdate=true;
+    }
+  } else { meteor.next-=rdt; if (meteor.next<=0) spawnMeteor(); }
+
+  // aurora breathes — UV scroll + slow sway
+  for (let i=0;i<auroras.length;i++){
+    const A=auroras[i];
+    A.tex.offset.x = T*A.sp;
+    A.mesh.scale.y = 1 + 0.08*Math.sin(T*0.11+A.ph);
+    A.mesh.rotation.y = 0.03*Math.sin(T*0.05+A.ph);
+    A.mesh.material.opacity = A.op*(0.8+0.2*Math.sin(T*0.07+A.ph*1.7));
+  }
 
   // dial
   el('dialg').setAttribute('transform', 'rotate('+(-theta/DEG)+')');
