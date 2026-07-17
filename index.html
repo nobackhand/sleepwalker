@@ -1057,6 +1057,10 @@ function showTitle(){
 /* ============================== input ============================== */
 let dragging=false, dragId=null, lastX=0, keyRot=0;
 function endDrag(){ dragging=false; dragId=null; canvas.classList.remove('dragging'); }
+/* physics chases thetaT at max 7 rad/s — unclamped input (inertial scroll,
+   long drags) banks a backlog that spins the world for seconds after the
+   player stops. Keep the target within one flip of reality. */
+function addRot(d){ thetaT = clamp(thetaT + d, theta-3.3, theta+3.3); }
 canvas.addEventListener('pointerdown', e=>{
   if (e.button!==undefined && e.button!==0) return;
   if (state==='title'){ startDream(); return; }
@@ -1069,13 +1073,13 @@ canvas.addEventListener('pointerdown', e=>{
 window.addEventListener('pointermove', e=>{
   if (!dragging || e.pointerId!==dragId) return;
   const dx=e.clientX-lastX; lastX=e.clientX;
-  if (state==='play'||state==='intro') thetaT += dx*0.0052;
+  if (state==='play'||state==='intro') addRot(dx*0.0052);
 });
 window.addEventListener('pointerup', e=>{ if (e.pointerId===dragId) endDrag(); });
 window.addEventListener('pointercancel', e=>{ if (e.pointerId===dragId) endDrag(); });
 window.addEventListener('blur', ()=>{ keyRot=0; endDrag(); });   // keyup never arrives unfocused
 window.addEventListener('wheel', e=>{
-  if (state==='play'||state==='intro') thetaT += Math.sign(e.deltaY)*0.12;
+  if (state==='play'||state==='intro') addRot(Math.sign(e.deltaY)*0.12);
 }, { passive:true });
 window.addEventListener('contextmenu', e=>e.preventDefault());
 window.addEventListener('keydown', e=>{
@@ -1239,7 +1243,8 @@ function physStep(h){
   // dream-skip: a soft hop as she steps off an edge, so small gaps are crossable
   if (canWalk && !groundedNow){
     const vu=v.dot(up);
-    v.addScaledVector(up, 4.4-Math.min(vu,0));   // cancel any corner-roll sink, then hop
+    v.addScaledVector(up, Math.max(0, 4.4-vu));  // top up to exactly 4.4 — cancel any
+                                                 // corner-roll sink, never stack on top
     if (window.__hopLog) window.__hopLog.push({z:+p.z.toFixed(2), y:+p.y.toFixed(2), vu:+vu.toFixed(2)});
     groundT=1;   // commit to the air — no coyote-walking after the hop
   }
@@ -1265,7 +1270,7 @@ function update(rdt){
   const dt=rdt*ts;
 
   // key rotation
-  if (keyRot!==0 && (state==='play'||state==='intro')) thetaT += keyRot*4.5*dt;
+  if (keyRot!==0 && (state==='play'||state==='intro')) addRot(keyRot*4.5*dt);
   if (autopilot) autopilotStep();
 
   // state timers
