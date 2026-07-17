@@ -151,9 +151,11 @@ scene.fog = new THREE.FogExp2(PAL.fog, 0.0095);
 
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 900);
 window.addEventListener('resize', ()=>{
-  camera.aspect = window.innerWidth/window.innerHeight;
+  const w=Math.max(1,window.innerWidth), h=Math.max(1,window.innerHeight);
+  camera.aspect = w/h;
   camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(w, h);
 });
 
 /* lights */
@@ -269,6 +271,7 @@ function audioInit(){
   try {
     const C = new (window.AudioContext||window.webkitAudioContext)();
     AU.ctx=C;
+    C.resume && C.resume();   // iOS can hand back a suspended context even in a gesture
     AU.master=C.createGain(); AU.master.gain.value = AU.muted?0:0.5; AU.master.connect(C.destination);
     // echo for dreaminess
     const d=C.createDelay(1.2); d.delayTime.value=0.42;
@@ -300,7 +303,7 @@ function degFreq(deg, base){ // pentatonic degree → Hz
   return (base||220)*Math.pow(2, oct + st/12);
 }
 function pluck(freq, vol, dur, pan){
-  if (!AU.ctx) return;
+  if (!AU.ctx || AU.muted) return;
   const C=AU.ctx, t=C.currentTime;
   const g=C.createGain();
   g.gain.setValueAtTime(0.0001,t);
@@ -320,7 +323,7 @@ function chime(dir){
   pluck(degFreq(AU.degree, 440), 0.1, 1.4, (Math.random()*0.8-0.4));
 }
 function thump(strength){
-  if (!AU.ctx) return;
+  if (!AU.ctx || AU.muted) return;
   const C=AU.ctx, t=C.currentTime;
   const len=0.15*C.sampleRate, buf=C.createBuffer(1,len,C.sampleRate), ch=buf.getChannelData(0);
   for (let i=0;i<len;i++) ch[i]=(Math.random()*2-1)*(1-i/len);
@@ -362,6 +365,12 @@ function melodyTick(){
   AU.melDeg = clamp(AU.melDeg + steps[(Math.random()*steps.length)|0], -3, 9);
   pluck(degFreq(AU.melDeg,220), 0.055, 2.2, Math.random()*0.7-0.35);
 }
+document.addEventListener('visibilitychange', ()=>{
+  if (!AU.ctx) return;
+  // rAF halts in hidden tabs but the pad/wind oscillators would keep droning
+  if (document.hidden) AU.ctx.suspend && AU.ctx.suspend();
+  else AU.ctx.resume && AU.ctx.resume();
+});
 function setMute(m){
   AU.muted=m;
   if (AU.master) AU.master.gain.value = m?0:0.5;
@@ -866,32 +875,37 @@ function showTitle(){
 }
 
 /* ============================== input ============================== */
-let dragging=false, lastX=0, keyRot=0;
+let dragging=false, dragId=null, lastX=0, keyRot=0;
+function endDrag(){ dragging=false; dragId=null; canvas.classList.remove('dragging'); }
 canvas.addEventListener('pointerdown', e=>{
+  if (e.button!==undefined && e.button!==0) return;
   if (state==='title'){ startDream(); return; }
   if ((state==='woke'||state==='void') && ovShown){ retry(); return; }
   if (state==='end' && ovShown){ beginIntroFor(0); return; }
-  dragging=true; lastX=e.clientX; canvas.classList.add('dragging');
+  if (dragging) return;                       // second finger must not hijack the drag
+  dragging=true; dragId=e.pointerId; lastX=e.clientX; canvas.classList.add('dragging');
   canvas.setPointerCapture && canvas.setPointerCapture(e.pointerId);
 });
 window.addEventListener('pointermove', e=>{
-  if (!dragging) return;
+  if (!dragging || e.pointerId!==dragId) return;
   const dx=e.clientX-lastX; lastX=e.clientX;
   if (state==='play'||state==='intro') thetaT += dx*0.0052;
 });
-window.addEventListener('pointerup', ()=>{ dragging=false; canvas.classList.remove('dragging'); });
-window.addEventListener('pointercancel', ()=>{ dragging=false; canvas.classList.remove('dragging'); });
+window.addEventListener('pointerup', e=>{ if (e.pointerId===dragId) endDrag(); });
+window.addEventListener('pointercancel', e=>{ if (e.pointerId===dragId) endDrag(); });
+window.addEventListener('blur', ()=>{ keyRot=0; endDrag(); });   // keyup never arrives unfocused
 window.addEventListener('wheel', e=>{
   if (state==='play'||state==='intro') thetaT += Math.sign(e.deltaY)*0.12;
 }, { passive:true });
 window.addEventListener('contextmenu', e=>e.preventDefault());
 window.addEventListener('keydown', e=>{
+  if (e.repeat) return;   // held R must not rebuild the level at key-repeat rate
   const k=e.key.toLowerCase();
   if (k==='arrowleft'||k==='a') keyRot=-1;
   if (k==='arrowright'||k==='d') keyRot=1;
   if (k==='m'){ setMute(!AU.muted); }
   if (k==='r'){
-    if (state==='play'||state==='woke'||state==='void') retry();
+    if (state==='play'||state==='intro'||state==='woke'||state==='void') retry();
     else if (state==='end') beginIntroFor(0);
   }
   if (k===' '||k==='enter'){
@@ -901,7 +915,7 @@ window.addEventListener('keydown', e=>{
   }
   if (k>='1' && k<='5'){
     const idx=parseInt(k,10)-1;
-    if (idx<=best && (state==='play'||state==='title'||state==='end'||state==='intro')) beginIntroFor(idx);
+    if (idx<=best && state!=='won') beginIntroFor(idx);
   }
 });
 window.addEventListener('keyup', e=>{
@@ -1233,10 +1247,14 @@ window.SW = {
   step: (n, dt)=>{ dt=dt||1/60; for (let i=0;i<n;i++) update(dt); return window.SW.state(); },
   shot: (w, h, q)=>{
     w=w||640; h=h||360;
+    const pw=window.innerWidth, ph=window.innerHeight;
     renderer.setSize(w, h);
     camera.aspect=w/h; camera.updateProjectionMatrix();
     renderer.render(scene, camera);
-    return canvas.toDataURL('image/jpeg', q||0.6);
+    const url=canvas.toDataURL('image/jpeg', q||0.6);
+    renderer.setSize(pw, ph);
+    camera.aspect=pw/ph; camera.updateProjectionMatrix();
+    return url;
   },
 };
 
