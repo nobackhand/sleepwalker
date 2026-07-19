@@ -1143,9 +1143,10 @@ canvas.addEventListener('pointerdown', e=>{
 window.addEventListener('pointermove', e=>{
   if (!dragging || e.pointerId!==dragId) return;
   const dx=e.clientX-lastX; lastX=e.clientX;
-  // screen-relative: a full-width swipe is the same turn on a phone as on a
-  // desktop (0.0052/px at the 1280px reference width)
-  if (state==='play'||state==='intro') addRot(dx*6.66/Math.max(480, window.innerWidth));
+  // screen-relative on small screens (a full-width phone swipe = a real turn),
+  // but clamped at 1440 — on a wide desktop window an unclamped divisor made a
+  // 180° flip take ~1800px of drag and dream 3 unbeatable by normal swipes
+  if (state==='play'||state==='intro') addRot(dx*6.66/clamp(window.innerWidth, 480, 1440));
 });
 window.addEventListener('pointerup', e=>{ if (e.pointerId===dragId) endDrag(); });
 window.addEventListener('pointercancel', e=>{ if (e.pointerId===dragId) endDrag(); });
