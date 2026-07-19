@@ -1093,14 +1093,20 @@ function fail(kind){
   } else sfxVoid();
 }
 const winStat={ t:0, best:0, record:false };
+/* a stored best must be a plausible crossing — anything else (corrupt write,
+   old bug, hand-edited) would show garbage and be unbeatable forever */
+function saneTime(t){ return isFinite(t) && t>0.5 && t<86400 ? t : null; }
+function fmtTime(t){
+  return t<60 ? t.toFixed(1)+'s' : Math.floor(t/60)+'m '+Math.round(t%60)+'s';
+}
 function win(){
   if (state!=='play') return;
   state='won'; wonT=0; sfxWin();
   winStat.t=playT; winStat.best=0; winStat.record=false;
   try {
-    const prev=parseFloat(localStorage.getItem('sw_t'+levelIndex));
+    const prev=saneTime(parseFloat(localStorage.getItem('sw_t'+levelIndex)));
     if (!prev || playT<prev){ winStat.record=true; winStat.best=playT;
-      localStorage.setItem('sw_t'+levelIndex, playT.toFixed(1)); }
+      if (saneTime(playT)) localStorage.setItem('sw_t'+levelIndex, playT.toFixed(1)); }
     else winStat.best=prev;
   } catch(e){ winStat.best=playT; }
   for (let i=0;i<6;i++) setTimeout(()=>spawnZzz(1.4), i*140);
@@ -1379,8 +1385,8 @@ function update(rdt){
   if (state==='won'){
     wonT+=rdt;
     if (wonT>0.7 && !ovShown){
-      const tLine='she crossed in '+winStat.t.toFixed(1)+'s'+
-        (winStat.record ? ' — her gentlest crossing yet' : ' · gentlest '+winStat.best.toFixed(1)+'s');
+      const tLine='she crossed in '+fmtTime(winStat.t)+
+        (winStat.record ? ' — her gentlest crossing yet' : ' · gentlest '+fmtTime(winStat.best));
       if (levelIndex+1>=LEVELS.length)
         showOv('Home at last.', 'She never knew how far she walked.',
                tLine+'<br>thank you for keeping her asleep', 'press R to dream it all again');
