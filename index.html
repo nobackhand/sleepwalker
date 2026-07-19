@@ -1130,7 +1130,7 @@ function endDrag(){ dragging=false; dragId=null; canvas.classList.remove('draggi
 /* physics chases thetaT at max 7 rad/s — unclamped input (inertial scroll,
    long drags) banks a backlog that spins the world for seconds after the
    player stops. Keep the target within one flip of reality. */
-function addRot(d){ thetaT = clamp(thetaT + d, theta-3.3, theta+3.3); }
+function addRot(d){ if (isFinite(d)) thetaT = clamp(thetaT + d, theta-3.3, theta+3.3); }
 canvas.addEventListener('pointerdown', e=>{
   if (e.button!==undefined && e.button!==0) return;
   if (state==='title'){ startDream(); return; }
@@ -1351,6 +1351,14 @@ function physStep(h){
   if (window.__trace && window.__hopLog && window.__hopLog.length>=window.__traceAfterHop)
     window.__trace.push([+p.x.toFixed(2),+p.y.toFixed(2),+p.z.toFixed(2),+theta.toFixed(3),+thetaT.toFixed(3),+v.x.toFixed(1),+v.y.toFixed(1),+v.z.toFixed(1)]);
   if (state==='play'){
+    // any NaN that sneaks into the integrator would otherwise softlock 'play'
+    // forever (NaN compares false with everything, so neither fail nor win
+    // can fire and she just vanishes) — send it to the void like a real fall
+    if (!isFinite(p.x+p.y+p.z+v.x+v.y+v.z)){
+      p.set(0,-VOID_R*2,0); v.set(0,0,0); slide.set(0,0,0);
+      fail('void');
+      return;
+    }
     if (p.x*p.x + p.y*p.y > VOID_R*VOID_R) fail('void');
     _t1.copy(p).sub(bedPos);
     if (_t1.length() < 1.9) win();
