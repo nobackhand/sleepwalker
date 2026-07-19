@@ -14,9 +14,9 @@ Single-file 3D gravity-rotation puzzle game; two-hour polish sprint just landed 
 - 9ebfd06 — Dev tooling: .claude/serve.py (static + POST /shot saves SW.shot() JPEGs to .claude/shots/) + launch.json
 
 ## Next (max 3, priority order)
-1. Draw-call reduction: index.html ~L120 `mat()` creates one MeshStandardMaterial per mesh (~300-500 draw calls x2 with shadows on dream 5). Hoist shared materials to module scope; verify FPS + full regression: serve via `python .claude/serve.py 8123`, then in-page `SW.warp(n); SW.auto(true); SW.step(18000)` must reach state 'won' for all 6 dreams.
-2. Real-device touch playtest: buttons/drag/portrait were verified with synthetic events only — open on a phone, confirm restart/mute taps, swipe feel, safe-area.
-3. Three.js CDN resilience: index.html loads r128 from cloudflare only; add a second-source fallback (or vendor the file) behind the existing THREE-undefined guard.
+1. Real-device touch playtest: buttons/drag/portrait were verified with synthetic events only — open on a phone, confirm restart/mute taps, swipe feel, safe-area.
+2. Three.js CDN resilience: index.html loads r128 from cloudflare only; add a second-source fallback (or vendor the file) behind the existing THREE-undefined guard.
+3. True draw-call cut (calls ~241 on dream 5, materials now shared): merge each segment's static deco into one BufferGeometry per material, or instance trees/flowers. Measure with `SW.perf()` before/after; 6-dream regression must stay green.
 
 ## Blockers / Open questions
 

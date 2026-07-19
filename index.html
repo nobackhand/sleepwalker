@@ -127,8 +127,24 @@ const PAL = {
   cloud:0x8a7fa8, floatRock:0x7a708f,
 };
 
-function mat(color, o){ return new THREE.MeshStandardMaterial(Object.assign(
-  { color, roughness:0.92, metalness:0.0, flatShading:true }, o||{})); }
+/* One material per color, forever. Bare mat(color) calls (trees, rocks, tops,
+   stems…) hit a module-level cache — 184 unique materials on dream 5 collapse
+   to a couple dozen, and reloads stop recompiling shaders. Cached materials
+   are marked shared so disposeGroup leaves them alone; option'd calls stay
+   per-instance and disposable. Never mutate a shared material per-mesh. */
+const MAT_CACHE=new Map();
+function mat(color, o){
+  if (o) return new THREE.MeshStandardMaterial(Object.assign(
+    { color, roughness:0.92, metalness:0.0, flatShading:true }, o));
+  let m=MAT_CACHE.get(color);
+  if (!m){
+    m=new THREE.MeshStandardMaterial({ color, roughness:0.92, metalness:0.0, flatShading:true });
+    m.userData.shared=true;
+    MAT_CACHE.set(color, m);
+  }
+  return m;
+}
+function sharedMat(make){ const m=make(); m.userData.shared=true; return m; }
 
 /* Deterministic position-hashed vertex displacement.
    r128 geometries duplicate shared corners (non-indexed icosahedra, cylinder seams),
@@ -579,30 +595,33 @@ function makeTree(rng){
   }
   return t;
 }
+const BULB_M=sharedMat(()=>new THREE.MeshStandardMaterial({ color:PAL.lantern,
+  emissive:PAL.lantern, emissiveIntensity:1.6, flatShading:true }));
+const GLOW_M=sharedMat(()=>new THREE.SpriteMaterial({ map:dotTex, color:PAL.lantern,
+  transparent:true, opacity:0.55, blending:THREE.AdditiveBlending, depthWrite:false }));
 function makeLantern(){
   const t=new THREE.Group();
   const post=new THREE.Mesh(new THREE.CylinderGeometry(0.035,0.05,1.15,5), mat(PAL.trunk));
   post.position.y=0.575; post.castShadow=true; t.add(post);
   const arm=new THREE.Mesh(new THREE.BoxGeometry(0.3,0.05,0.05), mat(PAL.trunk));
   arm.position.set(0.13,1.14,0); t.add(arm);
-  const bulb=new THREE.Mesh(new THREE.OctahedronGeometry(0.1,0),
-    new THREE.MeshStandardMaterial({ color:PAL.lantern, emissive:PAL.lantern,
-      emissiveIntensity:1.6, flatShading:true }));
+  const bulb=new THREE.Mesh(new THREE.OctahedronGeometry(0.1,0), BULB_M);
   bulb.position.set(0.26,1.02,0); t.add(bulb);
-  const sm=new THREE.SpriteMaterial({ map:dotTex, color:PAL.lantern, transparent:true,
-    opacity:0.55, blending:THREE.AdditiveBlending, depthWrite:false });
-  const glow=new THREE.Sprite(sm); glow.scale.set(1.1,1.1,1); glow.position.copy(bulb.position);
+  const glow=new THREE.Sprite(GLOW_M); glow.scale.set(1.1,1.1,1); glow.position.copy(bulb.position);
   t.add(glow);
   return t;
 }
+const FLOWER_CACHE=new Map();
 function makeFlower(rng){
   const t=new THREE.Group();
   const h=0.14+rng()*0.14;
   const stem=new THREE.Mesh(new THREE.CylinderGeometry(0.012,0.015,h,4), mat(0x6f8f7a));
   stem.position.y=h/2; t.add(stem);
   const cols=[0xf3b8c8, 0xcfc3ff, 0xfff0b8, 0xbfe8dd];
-  const head=new THREE.Mesh(new THREE.SphereGeometry(0.045,6,5), mat(cols[(rng()*cols.length)|0],
-    { emissive:cols[(rng()*cols.length)|0], emissiveIntensity:0.25 }));
+  const col=cols[(rng()*cols.length)|0];
+  let hm=FLOWER_CACHE.get(col);
+  if (!hm){ hm=sharedMat(()=>mat(col, { emissive:col, emissiveIntensity:0.25 })); FLOWER_CACHE.set(col, hm); }
+  const head=new THREE.Mesh(new THREE.SphereGeometry(0.045,6,5), hm);
   head.position.y=h+0.02; t.add(head);
   return t;
 }
@@ -922,14 +941,15 @@ function resetDust(){
 }
 
 /* clouds + big floating deco rocks */
+const CLOUD_M=sharedMat(()=>new THREE.MeshStandardMaterial({ color:PAL.cloud, roughness:1,
+  flatShading:true, transparent:true, opacity:0.75 }));
 let clouds=[];
 function buildAmbient(rng, zMax){
   const grp=new THREE.Group();
   clouds=[];
   for (let i=0;i<9;i++){
     const puff=new THREE.Group();
-    const m=new THREE.MeshStandardMaterial({ color:PAL.cloud, roughness:1, flatShading:true,
-      transparent:true, opacity:0.75 });
+    const m=CLOUD_M;
     const n=2+(rng()*2|0);
     for (let k=0;k<n;k++){
       const b=new THREE.Mesh(new THREE.IcosahedronGeometry(1.6+rng()*1.8,0), m);
@@ -953,9 +973,11 @@ const el = id=>document.getElementById(id);
 function disposeGroup(g){
   g.traverse(o=>{
     // sprites share one global quad in r128, and all maps here are shared
-    // module-level textures — dispose neither
+    // module-level textures — dispose neither; cached/shared materials
+    // (userData.shared) outlive every level and are never disposed
     if (o.geometry && !o.isSprite) o.geometry.dispose();
-    if (o.material) (Array.isArray(o.material)?o.material:[o.material]).forEach(m=>m.dispose());
+    if (o.material) (Array.isArray(o.material)?o.material:[o.material])
+      .forEach(m=>{ if (!m.userData.shared) m.dispose(); });
   });
 }
 function loadLevel(i){
@@ -1584,6 +1606,16 @@ window.SW = {
   ts: x=>{ timescale=clamp(x,0.1,8); },
   push: (x,y,z)=>{ v.set(x,y,z); },
   retry,
+  perf: ()=>{
+    renderer.render(scene, camera);
+    const mats=new Set(); let meshes=0;
+    if (levelGroup) levelGroup.traverse(o=>{ if (o.isMesh){ meshes++;
+      (Array.isArray(o.material)?o.material:[o.material]).forEach(m=>mats.add(m.uuid)); } });
+    return { calls:renderer.info.render.calls, triangles:renderer.info.render.triangles,
+             geometries:renderer.info.memory.geometries, textures:renderer.info.memory.textures,
+             programs:renderer.info.programs.length, levelMeshes:meshes,
+             levelUniqueMaterials:mats.size, cachedMaterials:MAT_CACHE.size };
+  },
   // headless driver: advance the full game loop without requestAnimationFrame
   step: (n, dt)=>{ dt=dt||1/60; for (let i=0;i<n;i++) update(dt); return window.SW.state(); },
   shot: (w, h, q)=>{
